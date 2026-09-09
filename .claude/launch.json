@@ -2,16 +2,42 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "node_modules/wrangler/bin/wrangler.js",
+        "dev",
+        "--port",
+        "8787"
+      ],
+      "port": 8787
+    },
+    {
       "name": "spike",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["node_modules/wrangler/bin/wrangler.js", "dev", "-c", "spike/wrangler.jsonc", "--port", "8787"],
-      "port": 8787
+      "runtimeArgs": [
+        "node_modules/wrangler/bin/wrangler.js",
+        "dev",
+        "-c",
+        "spike/wrangler.jsonc",
+        "--port",
+        "8790"
+      ],
+      "port": 8790
     },
     {
       "name": "spike-remote",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["node_modules/wrangler/bin/wrangler.js", "dev", "--remote", "-c", "spike/wrangler.jsonc", "--port", "8788"],
-      "port": 8788
+      "runtimeArgs": [
+        "node_modules/wrangler/bin/wrangler.js",
+        "dev",
+        "--remote",
+        "-c",
+        "spike/wrangler.jsonc",
+        "--port",
+        "8791"
+      ],
+      "port": 8791
     }
   ]
 }

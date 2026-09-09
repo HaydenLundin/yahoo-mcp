@@ -1,0 +1,13 @@
+# Copy to .dev.vars (gitignored) for `wrangler dev`. Production uses `wrangler secret put`.
+YAHOO_USER=you@yahoo.com
+# A Yahoo *app password* (16 chars), never your login password.
+YAHOO_APP_PASSWORD=xxxxxxxxxxxxxxxx
+# "true" registers the send tools. Keep false until milestone 5.
+SEND_ENABLED=false
+# Local only: skips Cloudflare Access on /authorize when the request host is localhost.
+ACCESS_DEV_BYPASS=true
+# Browser origins allowed to call /mcp besides our own (MCP Inspector default).
+ALLOWED_ORIGINS=http://localhost:6274
+# Production only (set as secrets, leave unset locally):
+# ACCESS_TEAM_DOMAIN=yourteam.cloudflareaccess.com
+# ACCESS_AUD=<Application Audience tag of the Access app on /authorize>
