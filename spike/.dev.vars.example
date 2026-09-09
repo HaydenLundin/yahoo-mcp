@@ -1,0 +1,4 @@
+# Copy to spike/.dev.vars (gitignored). Never commit real values.
+# YAHOO_APP_PASSWORD is a Yahoo *app password* (16 chars), not your login password.
+YAHOO_USER=you@yahoo.com
+YAHOO_APP_PASSWORD=xxxxxxxxxxxxxxxx

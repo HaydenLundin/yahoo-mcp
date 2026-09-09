@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "spike",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["node_modules/wrangler/bin/wrangler.js", "dev", "-c", "spike/wrangler.jsonc", "--port", "8787"],
+      "port": 8787
+    },
+    {
+      "name": "spike-remote",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["node_modules/wrangler/bin/wrangler.js", "dev", "--remote", "-c", "spike/wrangler.jsonc", "--port", "8788"],
+      "port": 8788
+    }
+  ]
+}

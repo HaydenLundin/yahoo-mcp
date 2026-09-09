@@ -1,0 +1,26 @@
+{
+  "name": "yahoo-mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Remote MCP server exposing a Yahoo Mail account to AI clients with Gmail-connector-parity permissions.",
+  "scripts": {
+    "spike:dev": "wrangler dev -c spike/wrangler.jsonc",
+    "spike:remote": "wrangler dev -c spike/wrangler.jsonc --remote"
+  },
+  "dependencies": {
+    "imapflow": "^2.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260908.1",
+    "@types/node": "^26.5.0",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.130.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "workerd"
+    ]
+  }
+}
