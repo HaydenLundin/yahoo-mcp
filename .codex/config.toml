@@ -1,0 +1,8 @@
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+CLAUDE_CODE_TASK_LIST_ID = "yahoo-mcp-tasks"
+
+[mcp_servers.yahoo]
+url = "https://yahoo-mcp.clthrl.workers.dev/mcp"

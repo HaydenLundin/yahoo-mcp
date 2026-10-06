@@ -14,6 +14,7 @@ Remote MCP server (one Cloudflare Worker) exposing a single Yahoo Mail account t
 
 ```
 pnpm typecheck            # tsc, no emit
+pnpm test                 # vitest, ImapFlow mocked, tools driven through an in-memory MCP client
 pnpm dev                  # wrangler dev on :8787 (reads .dev.vars)
 pnpm e2e [base-url]       # full OAuth + MCP path against a running server (needs ACCESS_DEV_BYPASS)
 pnpm db:migrate:local     # apply migrations/ to the local D1
@@ -31,7 +32,8 @@ pnpm audit:tail           # last 50 audit rows from production D1
 - Every tool body runs inside `runTool()`: errors become stable `CODE: message` tool errors and an audit row is written in the background. Never write to D1 or catch IMAP errors ad hoc inside a tool.
 - Server-side MCP clients send no `Origin` header; the `/mcp` origin check only rejects a present, non-allowlisted origin.
 - Production hostname: `https://yahoo-mcp.clthrl.workers.dev` (workers.dev subdomain `clthrl`). Cloudflare Access is scoped to `/authorize` only.
-- Tests: `scripts/e2e-oauth.mjs` is the integration test. Vitest unit tests with a mocked ImapFlow arrive in milestone 3.
+- Tests: `pnpm test` runs vitest in the node environment; `test/helpers/fake-imap.ts` stands in for ImapFlow via `vi.mock("imapflow")`, and `test/helpers/harness.ts` wires `buildServer()` to an in-memory MCP client so tools are exercised exactly as a client sees them. `scripts/e2e-oauth.mjs` covers the real runtime path against `wrangler dev`. Add a fixture and a test for every new tool.
+- Audit writes are awaited inside `runTool()`, never deferred with `waitUntil`, so a row exists before the client sees the result.
 
 ## Sync rule
 

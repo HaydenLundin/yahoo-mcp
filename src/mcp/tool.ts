@@ -32,7 +32,8 @@ export interface RunToolMeta {
 /**
  * Runs a tool body with the two cross-cutting behaviours every tool shares:
  * errors become `CODE: message` tool errors (never thrown into the transport), and
- * an audit row is written in the background with the outcome.
+ * an audit row is written with the outcome. The audit write is awaited, not deferred,
+ * so a row exists before the client ever sees the result.
  */
 export async function runTool(
   deps: ToolDeps,
@@ -43,25 +44,21 @@ export async function runTool(
     meta.kind === "write" ? await digestArgs(meta.args ?? {}) : "";
   try {
     const data = await body();
-    deps.waitUntil(
-      writeAudit(deps.env, deps.props, {
-        tool: meta.name,
-        argsDigest,
-        uids: meta.uids,
-        outcome: "ok",
-      }),
-    );
+    await writeAudit(deps.env, deps.props, {
+      tool: meta.name,
+      argsDigest,
+      uids: meta.uids,
+      outcome: "ok",
+    });
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
   } catch (err) {
     const e = normalizeError(err);
-    deps.waitUntil(
-      writeAudit(deps.env, deps.props, {
-        tool: meta.name,
-        argsDigest,
-        uids: meta.uids,
-        outcome: "error",
-      }),
-    );
+    await writeAudit(deps.env, deps.props, {
+      tool: meta.name,
+      argsDigest,
+      uids: meta.uids,
+      outcome: "error",
+    });
     return {
       content: [{ type: "text", text: `${e.code}: ${e.message}` }],
       isError: true,

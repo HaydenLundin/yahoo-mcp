@@ -1,7 +1,23 @@
-import { ImapFlow } from "imapflow";
+import { ImapFlow, type SearchObject } from "imapflow";
 import type { Env } from "../types";
+import { ToolError } from "./errors";
+import { decodeBody, type BodyPart } from "./mime";
 
 const YAHOO_IMAP = { host: "imap.mail.yahoo.com", port: 993 } as const;
+
+/**
+ * Workers constraint, verified on local workerd and on the real edge (2026-10-06): a single IMAP
+ * response line or literal larger than ~16 KB never finishes arriving. The command stalls until
+ * socketTimeout and the connection is dead afterwards. Multi-line responses of any total size are
+ * fine. Two rules follow from this and every tool must respect them:
+ *  - searches are windowed by message sequence number (pagedSearch), so a `* SEARCH` line never
+ *    carries more than SEARCH_WINDOW uids (about 8 KB);
+ *  - body parts are fetched in explicit byte ranges of IMAP_CHUNK_BYTES (downloadText), so no
+ *    literal exceeds the limit. imapflow's own download() is not used: for single-part messages it
+ *    also fetches the whole message header block, and Yahoo's headers alone can exceed 16 KB.
+ */
+export const IMAP_CHUNK_BYTES = 12_000;
+export const SEARCH_WINDOW = 1000;
 
 export interface ImapContext {
   env: Env;
@@ -25,18 +41,82 @@ export async function withImap<T>(
     port: YAHOO_IMAP.port,
     secure: true,
     auth: { user: ctx.env.YAHOO_USER, pass: ctx.env.YAHOO_APP_PASSWORD },
-    logger: false,
+    // imapflow swallows command failures (search() returns false) and only reports them to
+    // its logger. IMAP_DEBUG=true forwards warn/error entries, summarised, to the Worker log.
+    logger: ctx.env.IMAP_DEBUG === "true" ? debugLogger : false,
     connectionTimeout: 15_000,
     greetingTimeout: 15_000,
     socketTimeout: 30_000,
+  });
+  // A failed command can leave the socket to time out later; without a listener that
+  // surfaces as an uncaught exception in the Worker log long after the response was sent.
+  client.on("error", (err: unknown) => {
+    console.warn(
+      "imap connection error after response",
+      err instanceof Error ? err.message : String(err),
+    );
   });
   await client.connect();
   try {
     return await fn(client);
   } finally {
-    const bye = client.logout().catch(() => client.close());
+    const bye = closeQuietly(client);
     if (ctx.waitUntil) ctx.waitUntil(bye);
     else await bye;
+  }
+}
+
+interface ImapLogEntry {
+  msg?: string;
+  cid?: string;
+  err?: {
+    message?: string;
+    responseText?: string;
+    serverResponseCode?: string;
+    code?: string;
+  };
+  responseText?: string;
+  responseStatus?: string;
+}
+
+/** Only the fields that explain a failure. Never raw protocol frames, which could carry mail content. */
+function summarizeLog(entry: unknown): string {
+  const e = (entry ?? {}) as ImapLogEntry;
+  return JSON.stringify({
+    msg: e.msg,
+    cid: e.cid,
+    error: e.err?.message,
+    code: e.err?.code ?? e.err?.serverResponseCode ?? e.responseStatus,
+    response: e.err?.responseText ?? e.responseText,
+  });
+}
+
+const noop = (): void => {};
+const debugLogger = {
+  trace: noop,
+  debug: noop,
+  info: noop,
+  warn: (entry: unknown) => console.warn("imap", summarizeLog(entry)),
+  error: (entry: unknown) => console.error("imap", summarizeLog(entry)),
+  fatal: (entry: unknown) => console.error("imap", summarizeLog(entry)),
+};
+
+/** LOGOUT politely, but never wait on a wedged connection: force-close after a short grace period. */
+async function closeQuietly(client: ImapFlow): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), 5_000);
+  });
+  try {
+    const outcome = await Promise.race([
+      client.logout().then(() => "ok" as const),
+      deadline,
+    ]);
+    if (outcome === "timeout") client.close();
+  } catch {
+    client.close();
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -46,12 +126,150 @@ export async function withMailbox<T>(
   path: string,
   fn: (client: ImapFlow) => Promise<T>,
 ): Promise<T> {
+  return withImap(ctx, (client) => locked(client, path, fn));
+}
+
+/**
+ * Like withMailbox, but the folder is found by IMAP special-use flag (`\Drafts`, `\Sent`,
+ * `\Trash`, `\Archive`, `\Junk`) instead of by name. Yahoo's names are unusual (`Draft`,
+ * `Bulk`), so names are never hardcoded. fn also receives the resolved path.
+ */
+export async function withSpecialUse<T>(
+  ctx: ImapContext,
+  specialUse: SpecialUse,
+  fn: (client: ImapFlow, path: string) => Promise<T>,
+): Promise<T> {
   return withImap(ctx, async (client) => {
-    const lock = await client.getMailboxLock(path);
-    try {
-      return await fn(client);
-    } finally {
-      lock.release();
-    }
+    const path = await resolveSpecialUse(client, specialUse);
+    return locked(client, path, (c) => fn(c, path));
   });
+}
+
+export type SpecialUse =
+  "\\Drafts" | "\\Sent" | "\\Trash" | "\\Archive" | "\\Junk";
+
+export async function resolveSpecialUse(
+  client: ImapFlow,
+  specialUse: SpecialUse,
+): Promise<string> {
+  const folders = await client.list();
+  const match = folders.find((f) => f.specialUse === specialUse);
+  if (!match) {
+    throw new ToolError(
+      "FOLDER_NOT_FOUND",
+      `Yahoo did not report a folder with special-use ${specialUse}. Use list_folders to see what exists.`,
+    );
+  }
+  return match.path;
+}
+
+async function locked<T>(
+  client: ImapFlow,
+  path: string,
+  fn: (client: ImapFlow) => Promise<T>,
+): Promise<T> {
+  const lock = await client.getMailboxLock(path);
+  try {
+    return await fn(client);
+  } finally {
+    lock.release();
+  }
+}
+
+/**
+ * Download one body part as text. Fetches `BODY.PEEK[part]<start.IMAP_CHUNK_BYTES>` ranges until
+ * the part ends or `maxBytes` raw bytes have arrived, then transfer-decodes and charset-decodes
+ * using what BODYSTRUCTURE said about the part.
+ */
+export async function downloadText(
+  client: ImapFlow,
+  uid: number,
+  part: BodyPart,
+  maxBytes: number,
+): Promise<string> {
+  const key = part.id.toLowerCase();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  while (received < maxBytes) {
+    const msg = await client.fetchOne(
+      String(uid),
+      {
+        uid: true,
+        bodyParts: [{ key, start: received, maxLength: IMAP_CHUNK_BYTES }],
+      },
+      { uid: true },
+    );
+    const chunk = msg ? msg.bodyParts?.get(key) : undefined;
+    if (!chunk || chunk.length === 0) break;
+    chunks.push(chunk);
+    received += chunk.length;
+    if (chunk.length < IMAP_CHUNK_BYTES) break;
+  }
+  if (received === 0) return "";
+  const raw = new Uint8Array(received);
+  let offset = 0;
+  for (const c of chunks) {
+    raw.set(c, offset);
+    offset += c.length;
+  }
+  return decodeBody(raw, part);
+}
+
+export interface PagedSearch {
+  /** The requested page of uids, newest first. */
+  uids: number[];
+  /** Exact match count when known (unfiltered, or the whole folder was scanned); otherwise null. */
+  total: number | null;
+  hasMore: boolean;
+  /** Number of windows (round trips) it took; useful for tests and logs. */
+  windows: number;
+}
+
+/**
+ * Search newest-first in SEARCH_WINDOW-message windows until the requested page is filled or the
+ * folder is exhausted. Yahoo exposes at most 10,000 messages per folder and has no ESEARCH, so
+ * this is at most ten round trips, and usually one. `criteria` must not contain `seq` or `uid`.
+ */
+export async function pagedSearch(
+  client: ImapFlow,
+  criteria: SearchObject,
+  page: { offset: number; limit: number },
+): Promise<PagedSearch> {
+  const mailbox =
+    client.mailbox && typeof client.mailbox === "object"
+      ? client.mailbox
+      : null;
+  const exists = mailbox?.exists ?? 0;
+  if (exists === 0) return { uids: [], total: 0, hasMore: false, windows: 0 };
+
+  const { all: _all, ...filters } = criteria;
+  const unfiltered = Object.values(filters).every((v) => v === undefined);
+  const needed = page.offset + page.limit;
+  const matches: number[] = [];
+  let hi = exists;
+  let windows = 0;
+
+  while (hi >= 1 && matches.length < needed) {
+    const lo = Math.max(1, hi - SEARCH_WINDOW + 1);
+    const result = await client.search(
+      { ...filters, seq: `${lo}:${hi}` },
+      { uid: true },
+    );
+    if (result === false)
+      throw new ToolError(
+        "IMAP_SEARCH_FAILED",
+        "Yahoo rejected the search criteria",
+      );
+    matches.push(...(result ?? []).slice().sort((a, b) => b - a));
+    hi = lo - 1;
+    windows++;
+  }
+
+  const complete = hi < 1;
+  return {
+    uids: matches.slice(page.offset, needed),
+    total: unfiltered ? exists : complete ? matches.length : null,
+    hasMore: complete ? matches.length > needed : true,
+    windows,
+  };
 }

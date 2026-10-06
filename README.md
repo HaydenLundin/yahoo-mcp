@@ -10,7 +10,7 @@ Yahoo has no first-party connector in any of these tools. This fills the gap wit
 
 ## Status
 
-Milestone 2 of 7: a single Cloudflare Worker serving OAuth 2.1 (dynamic client registration, PKCE, refresh rotation), a Cloudflare Access guarded consent page, and a stateless MCP endpoint with one tool, `list_folders`. Read, organize, draft, and two-phase send tools follow in milestones 3 to 5.
+Milestone 3 of 7: a single Cloudflare Worker serving OAuth 2.1 (dynamic client registration, PKCE, refresh rotation), a Cloudflare Access guarded consent page, and a stateless MCP endpoint with the read tools: `list_folders`, `search_messages`, `get_message`, `get_thread`, `list_drafts`. Connected and working from Claude Code against the live mailbox. Organize, draft, and two-phase send tools follow in milestones 4 and 5.
 
 ## Run it
 
@@ -21,7 +21,8 @@ pnpm install
 cp .dev.vars.example .dev.vars   # fill in YAHOO_USER and YAHOO_APP_PASSWORD
 pnpm db:migrate:local
 pnpm dev                          # http://localhost:8787
-pnpm e2e                          # exercises the full OAuth + MCP path
+pnpm e2e                          # exercises the full OAuth + MCP path against the live mailbox
+pnpm test                         # unit tests with a mocked IMAP server
 ```
 
 Deploying: `pnpm deploy`, then set the secrets listed in `.dev.vars.example` with `wrangler secret put`, apply `pnpm db:migrate:remote`, and put a Cloudflare Access application on `<your-host>/authorize` allowing only your email. Details in [OVERVIEW.md](OVERVIEW.md#operating-it).

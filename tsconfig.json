@@ -18,6 +18,8 @@
   },
   "include": [
     "src/**/*.ts",
-    "spike/**/*.ts"
+    "spike/**/*.ts",
+    "test/**/*.ts",
+    "vitest.config.ts"
   ]
 }

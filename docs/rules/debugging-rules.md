@@ -6,6 +6,7 @@ Known behaviours that look like bugs but are not, and where to look first.
 
 - A freshly registered workers.dev subdomain returns an opaque `internal error; reference=...` for every path for a minute or two. Wait, then retry, before touching code.
 - Local workerd (`wrangler dev`) logs `Uncaught TypeError: Cannot read properties of undefined (reading 'emit')` from `node-internal:internal_process` after IMAP sessions, triggered by a MaxListeners warning in the socket shim. Responses are unaffected and it does not happen on the edge. Ignore it locally.
+- **Any single IMAP response line or literal over ~16 KB stalls under Workers**, locally and on the edge: the command never completes, `socketTimeout` fires, and the connection is dead. Symptoms: imapflow `search()` returns `false`, "Socket timeout" errors in the log about 20-30 s later, `IMAP_SEARCH_FAILED`. Multi-line responses (FETCH of hundreds of summaries) are fine. Keep searches inside `pagedSearch` and downloads inside `downloadText` (ranged `BODY.PEEK[part]<start.len>` fetches; imapflow's `download()` also pulls the full message header for single-part messages, and Yahoo's headers alone can exceed 16 KB); never call `client.search()` without a `seq` window unless the match set is known to be small (thread ids, header lookups).
 - `wrangler dev --remote` uploads `.dev.vars` as preview secrets. `wrangler deploy` does not; production secrets come only from `wrangler secret put`.
 - pnpm 10 skips postinstall scripts. If `wrangler dev` cannot find workerd, check `pnpm.onlyBuiltDependencies` in `package.json` and run `pnpm install` again.
 - Wrangler's OAuth token expires hourly and refreshes on the next command. A one-off `Authentication error [code: 10000]` on the first API call after a pause is that refresh racing; rerun the command.
@@ -13,10 +14,13 @@ Known behaviours that look like bugs but are not, and where to look first.
 
 ## Yahoo IMAP
 
+- Yahoo rate-limits IMAP logins per account: `AUTHENTICATE Rate limit hit.` with response code `LIMIT`, surfaced as `IMAP_RATE_LIMITED`. Every tool call is one login, and so is every health probe against the spike Worker. Stop dev servers you are not reading, do not loop `pnpm e2e`, and wait several minutes after a `LIMIT`. The app password is not the problem.
 - Failed logins are slow (about 5 s). Successful connect plus login is about 1.7 s on the edge. If every call is slow, check credentials first.
 - Folder names: `Sent`, `Draft` (singular), `Trash`, `Archive`, `Bulk` (junk). Special-use flags are correct; names are not to be trusted.
-- `INBOX` reports `EXISTS` as exactly 10000 on a mailbox with more mail. Treat totals as "at least" until verified with STATUS.
-- Capability `MESSAGELIMIT=1000`: fetch and search ranges are capped at 1000 messages per command. Paginate.
+- Yahoo exposes at most the newest 10,000 messages of a folder over IMAP. `EXISTS`, `STATUS MESSAGES`, and `UID SEARCH ALL` all report 10000 on a larger INBOX while `UIDNEXT` keeps growing. `search_messages.total` therefore means "matches among the newest 10,000".
+- Yahoo has no ESEARCH, so `RETURN (PARTIAL ...)` is impossible; imapflow emulates COUNT/MIN/MAX client-side from the full uid list. Paging is done in the Worker: search returns all uids (about 70 KB for 10,000), then fetch only the page.
+- Capability `MESSAGELIMIT=1000`: fetch ranges are capped at 1000 messages per command. Pages are at most 50, so this never triggers.
+- imapflow `search()` returns `false` instead of throwing when the server rejects the command, and only its logger sees why. Set `IMAP_DEBUG=true` in `.dev.vars` to forward those entries, summarised, to the Worker log.
 - Capability `UIDONLY` is advertised; the code is UID-based already, so nothing to do, but do not introduce sequence numbers.
 - A `STARTTLS` upgrade cannot work on Workers (the runtime cannot upgrade an existing socket). Always implicit TLS on 993 and 465.
 

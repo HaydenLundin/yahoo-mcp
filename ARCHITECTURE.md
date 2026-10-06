@@ -152,9 +152,9 @@ Reference: Anthropic's Gmail connector = search/read, drafts, labels/threads, at
 
 | Tool | Params | Returns |
 |---|---|---|
-| `search_messages` | `query?, from?, to?, subject?, since?, before?, unread_only?, flagged_only?, folder="INBOX", limit=20, offset=0` | `{ messages: [{uid, folder, from, to, subject, date, flags, has_attachments, size}], total }` — headers only, never bodies |
+| `search_messages` | `query?, from?, to?, subject?, since?, before?, unread_only?, flagged_only?, folder="INBOX", limit=20, offset=0` | `{ messages: [{uid, folder, from, to, cc, subject, date, flags, unread, flagged, has_attachments, size}], total, has_more }` — headers only, never bodies; `total` is `null` when unknown (see §6) |
 | `get_message` | `uid, folder="INBOX", format="text"\|"html"` | headers + body + `attachments: [{filename, mime, size}]` (no content) |
-| `get_thread` | `uid, folder="INBOX"` | messages sharing References / In-Reply-To chain, in date order |
+| `get_thread` | `uid, folder="INBOX", include_bodies=false` | messages in the same conversation, oldest first. Uses the server-side OBJECTID `THREADID` when Yahoo provides one, else the References / In-Reply-To chain. `include_bodies` adds plain-text bodies (first 20 messages, 20 KB each) so a thread can be summarised in one call |
 | `list_folders` | — | `[{path, delimiter, special_use?}]` |
 | `list_drafts` | `limit=20` | same shape as `search_messages` over Drafts |
 
@@ -220,7 +220,8 @@ Phase-1 send tools are deliberately *not* destructive — they only write a D1 r
 
 `lib/imap.ts`
 - One `ImapFlow` per tool call: `connect → getMailboxLock → op → lock.release → logout`. No pooling (Workers isolates are ephemeral; Yahoo tolerates short sessions).
-- Always UID-based (`uid: true` on fetch/search/move). Never sequence numbers.
+- Always UID-based (`uid: true` on fetch/search/move). Sequence numbers appear only as search *criteria* in `pagedSearch` windows, never to address a message.
+- **Workers 16 KB rule** (measured 2026-10-06 on local workerd and the real edge): a single IMAP response line or literal over ~16 KB never finishes arriving; the command stalls to `socketTimeout` and the connection dies. Multi-line responses of any size are fine. Hence `pagedSearch` searches in 1000-message sequence windows newest-first (a `* SEARCH` line of at most ~8 KB) and `downloadText` fetches body parts as explicit 12 KB byte ranges and decodes transfer encoding and charset itself (imapflow's `download()` is avoided: for single-part messages it also fetches the full header block, which Yahoo routinely pushes past 16 KB). Yahoo has no ESEARCH, so server-side `PARTIAL` is not available; `search_messages.total` is exact when the folder was fully scanned or the search was unfiltered, else `null` with `has_more: true`.
 - Yahoo specifics: host `imap.mail.yahoo.com:993` `secure:true`; special-use folders are `Archive`, `Bulk Mail`, `Draft`, `Sent`, `Trash` — resolve via `list()` special-use flags, don't hardcode names. Yahoo does support `MOVE`.
 - Timeouts: 15s connect, 30s per op. Surface IMAP errors as MCP tool errors with a stable `code`.
 - Body handling: prefer `text/plain`; if only HTML, run through a sanitizer and produce text. Cap body at 50 KB in responses; note truncation.
@@ -290,11 +291,17 @@ yahoo-mcp/
 ├── migrations/
 │   └── 0001_init.sql
 ├── test/
-│   ├── tools.test.ts       # vitest + @cloudflare/vitest-pool-workers, mocked ImapFlow
-│   └── oauth.test.ts
+│   ├── read-tools.test.ts  # vitest (node env): tools driven through an in-memory MCP client, ImapFlow mocked
+│   ├── mime.test.ts
+│   ├── audit.test.ts
+│   └── helpers/            # FakeImapFlow, fixtures, harness
+├── scripts/
+│   └── e2e-oauth.mjs       # full client path against a running server: OAuth + MCP + real IMAP
 ├── ARCHITECTURE.md         # this file
 └── OVERVIEW.md
 ```
+
+Tests run in plain vitest rather than `@cloudflare/vitest-pool-workers`: the tool logic has no Workers-specific surface once ImapFlow and D1 are mocked, and the real runtime path (workerd, OAuth, Yahoo) is exercised by `scripts/e2e-oauth.mjs` against `wrangler dev`.
 
 `wrangler.jsonc` essentials:
 ```jsonc

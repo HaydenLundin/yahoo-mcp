@@ -29,6 +29,12 @@ const CONNECT_CODES = new Set([
 export function normalizeError(err: unknown): ToolError {
   if (err instanceof ToolError) return err;
   const e = (err ?? {}) as ImapLikeError;
+  if (e.serverResponseCode === "LIMIT" || /rate limit/i.test(e.responseText ?? "")) {
+    return new ToolError(
+      "IMAP_RATE_LIMITED",
+      "Yahoo is rate-limiting IMAP logins for this account. Wait a few minutes and try again; the app password is fine.",
+    );
+  }
   if (e.authenticationFailed) {
     return new ToolError(
       "IMAP_AUTH_FAILED",

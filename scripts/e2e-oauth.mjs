@@ -170,6 +170,46 @@ log(
     .join(", "),
 );
 
+// 5b. Read tools against the real mailbox. Counts and lengths only; never print mail content.
+async function tool(name, args) {
+  const started = Date.now();
+  const res = await rpc("tools/call", { name, arguments: args });
+  if (res.isError) fail(`${name} returned error: ${res.content?.[0]?.text}`);
+  return { data: JSON.parse(res.content[0].text), ms: Date.now() - started };
+}
+
+const search = await tool("search_messages", { limit: 3 });
+if (!Array.isArray(search.data.messages) || (search.data.total !== null && search.data.total < search.data.messages.length)) {
+  fail("search_messages shape");
+}
+for (const m of search.data.messages) if ("body" in m) fail("search_messages leaked a body");
+log(`search_messages ok in ${search.ms} ms: ${search.data.messages.length} of ${search.data.total ?? "unknown"} in ${search.data.folder}, has_more=${search.data.has_more}`);
+
+const unread = await tool("search_messages", { unread_only: true, limit: 1 });
+log(`search_messages(unread_only) ok in ${unread.ms} ms: total ${unread.data.total}`);
+
+if (search.data.messages.length) {
+  const uid = search.data.messages[0].uid;
+  const msg = await tool("get_message", { uid });
+  if (msg.data.uid !== uid || typeof msg.data.body !== "string" || !Array.isArray(msg.data.attachments)) {
+    fail("get_message shape");
+  }
+  log(
+    `get_message ok in ${msg.ms} ms: body_format=${msg.data.body_format} body_chars=${msg.data.body.length} ` +
+      `truncated=${msg.data.truncated} attachments=${msg.data.attachments.length} references=${msg.data.references.length}`,
+  );
+
+  const thread = await tool("get_thread", { uid });
+  if (!thread.data.messages.some((m) => m.uid === uid)) fail("get_thread does not include the requested message");
+  log(
+    `get_thread ok in ${thread.ms} ms: ${thread.data.messages.length} message(s), matched_by=${thread.data.matched_by}, ` +
+      `thread_id=${thread.data.thread_id ? "yes" : "no"}`,
+  );
+}
+
+const drafts = await tool("list_drafts", { limit: 5 });
+log(`list_drafts ok in ${drafts.ms} ms: ${drafts.data.messages.length} of ${drafts.data.total} in ${drafts.data.folder}`);
+
 // 6. Refresh token rotation.
 const refresh = await fetch(as.token_endpoint, {
   method: "POST",

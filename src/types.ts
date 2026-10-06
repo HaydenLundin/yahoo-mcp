@@ -23,6 +23,8 @@ export interface Env {
   ACCESS_DEV_BYPASS?: string;
   /** Comma-separated browser origins allowed to call /mcp besides our own (e.g. MCP Inspector). */
   ALLOWED_ORIGINS?: string;
+  /** "true" forwards imapflow warn/error log entries (summarised, no protocol frames) to the Worker log. */
+  IMAP_DEBUG?: string;
 }
 
 /** Stored encrypted on the grant by the OAuth provider; surfaces as ctx.props on every /mcp call. */
