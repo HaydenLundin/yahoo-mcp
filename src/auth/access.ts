@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createRemoteJWKSet, decodeJwt, jwtVerify } from "jose";
 import type { Env } from "../types";
 
 export interface Operator {
@@ -64,11 +64,32 @@ export async function requireOperator(
       return new Response("Access token has no email claim", { status: 403 });
     return { email };
   } catch (err) {
-    console.warn(
-      "Access JWT verification failed",
-      err instanceof Error ? err.message : err,
+    const reason = err instanceof Error ? err.message : String(err);
+    const claims = describeClaims(token);
+    console.warn("Access JWT verification failed:", reason, "|", claims);
+    // Only visitors who already passed Cloudflare Access reach this handler, so the reader
+    // is the operator. Name the mismatched claim so the fix is obvious; never echo the token.
+    return new Response(
+      [
+        `Invalid Cloudflare Access token: ${reason}.`,
+        `Token claims: ${claims}.`,
+        `This server expects iss=${issuer} and aud=${env.ACCESS_AUD}.`,
+        "Fix the mismatched secret with `wrangler secret put ACCESS_TEAM_DOMAIN` or `wrangler secret put ACCESS_AUD`, then retry.",
+      ].join("\n"),
+      { status: 403, headers: { "content-type": "text/plain; charset=utf-8" } },
     );
-    return new Response("Invalid Cloudflare Access token", { status: 403 });
+  }
+}
+
+/** Unverified read of iss/aud/exp for diagnostics only. Never use these for authorization. */
+function describeClaims(token: string): string {
+  try {
+    const { iss, aud, exp } = decodeJwt(token);
+    const audText = Array.isArray(aud) ? aud.join(",") : aud;
+    const expText = exp ? new Date(exp * 1000).toISOString() : "none";
+    return `iss=${iss ?? "none"} aud=${audText ?? "none"} exp=${expText}`;
+  } catch {
+    return "token is not a decodable JWT";
   }
 }
 
