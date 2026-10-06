@@ -20,6 +20,14 @@ Known behaviours that look like bugs but are not, and where to look first.
 - Capability `UIDONLY` is advertised; the code is UID-based already, so nothing to do, but do not introduce sequence numbers.
 - A `STARTTLS` upgrade cannot work on Workers (the runtime cannot upgrade an existing socket). Always implicit TLS on 993 and 465.
 
+## Cloudflare Access on /authorize
+
+- The 403 page on `/authorize` prints the rejection reason, the token's `iss`/`aud`, and what the server expects. Only Access-authenticated visitors see it. The **Token claims** line is the truth; the secrets must match it.
+- `ACCESS_TEAM_DOMAIN` is the bare hostname from `iss` without `https://` (for example `hrl01.cloudflareaccess.com`). `ACCESS_AUD` is the `aud` value verbatim.
+- "no applicable key found in the JSON Web Key Set" means the team-domain secret points at a different (but existing) Access domain. "Expected 200 OK from the JSON Web Key Set HTTP response" means it points at a domain that does not exist. `unexpected "aud" claim value` means `ACCESS_AUD` is wrong.
+- The Access login page header shows the organization's display name (an auto-generated one like `throbbing-block-4f73`), which is not the team domain. The team domain is the host in the login URL and the only one serving `/cdn-cgi/access/certs`.
+- Secrets take effect on the next request; no redeploy. The Access cookie from a failed attempt stays valid, so just retry `/mcp` Authenticate.
+
 ## OAuth and MCP
 
 - `401` from `/mcp` with a `WWW-Authenticate` header is correct for unauthenticated calls; that is how clients discover the authorization server.
