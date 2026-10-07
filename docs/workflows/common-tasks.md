@@ -13,7 +13,7 @@ Step-by-step checklists for recurring work.
 ## Deploy to production
 
 1. `pnpm typecheck && pnpm e2e` against a local server.
-2. `pnpm deploy`. First deploy prints the workers.dev URL.
+2. `pnpm run deploy`. First deploy prints the workers.dev URL.
 3. If migrations changed: `pnpm db:migrate:remote`.
 4. If secrets changed: the operator runs `wrangler secret put <NAME>` for each one (`YAHOO_USER`, `YAHOO_APP_PASSWORD`, `SEND_ENABLED`, `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`). Never paste secret values into chat or files.
 5. Smoke test: `curl -i https://<host>/mcp` returns 401 with `WWW-Authenticate`; `https://<host>/authorize` redirects to the Cloudflare Access login.
@@ -40,6 +40,12 @@ claude mcp add --transport http yahoo https://yahoo-mcp.clthrl.workers.dev/mcp
 1. Yahoo Account Security, delete the old app password, create a new one.
 2. `wrangler secret put YAHOO_APP_PASSWORD`. Takes effect on the next request.
 3. Update `.dev.vars` locally.
+
+## Enable sending (once, after milestone 5)
+
+1. `wrangler secret put SEND_ENABLED` with value `true`.
+2. In Claude Code ask for a test send to yourself; the assistant shows a preview and asks before `confirm_send`.
+3. Check the message arrives and that a copy sits in Yahoo's Sent folder (`saved_to_sent: true` in the tool result).
 
 ## Switch to read-only mode
 

@@ -2,7 +2,7 @@
 YAHOO_USER=you@yahoo.com
 # A Yahoo *app password* (16 chars), never your login password.
 YAHOO_APP_PASSWORD=xxxxxxxxxxxxxxxx
-# "true" registers the send tools. Keep false until milestone 5.
+# "true" registers the send tools (send_message, reply_message, forward_message, confirm_send, cancel_send).
 SEND_ENABLED=false
 # Local only: skips Cloudflare Access on /authorize when the request host is localhost.
 ACCESS_DEV_BYPASS=true

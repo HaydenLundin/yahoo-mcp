@@ -243,6 +243,33 @@ if (search.data.messages.length) {
   log(`mark read/unread toggled and restored in ${first.ms}+${restore.ms} ms`);
 }
 
+// 5d. Send tools, phase one only. Every prepared message is cancelled; nothing is ever sent by this script.
+const toolNames = tools.tools.map((t) => t.name);
+if (toolNames.includes("send_message")) {
+  const prepared = await tool("send_message", { to: ["e2e@example.com"], subject: `${stamp} send`, body_text: "Never sent: the e2e cancels this." });
+  if (!/^[A-Za-z0-9_-]{43}$/.test(prepared.data.confirm_token) || prepared.data.preview.kind !== "send") fail("send_message shape");
+  log(`send_message ok in ${prepared.ms} ms: token issued, expires ${prepared.data.expires_at}`);
+  const cancelled = await tool("cancel_send", { confirm_token: prepared.data.confirm_token });
+  if (cancelled.data.cancelled !== true) fail("cancel_send did not cancel");
+  const stale = await rpc("tools/call", { name: "confirm_send", arguments: { confirm_token: prepared.data.confirm_token } });
+  if (!stale.isError || !String(stale.content?.[0]?.text).startsWith("CONFIRM_TOKEN_INVALID")) fail("cancelled token was accepted by confirm_send");
+  log(`cancel_send ok in ${cancelled.ms} ms; confirm after cancel correctly refused`);
+
+  if (search.data.messages.length) {
+    const uid = search.data.messages[0].uid;
+    const reply = await tool("reply_message", { uid, body_text: "Never sent: e2e reply preview." });
+    if (reply.data.preview.kind !== "reply" || !Array.isArray(reply.data.preview.to)) fail("reply_message shape");
+    await tool("cancel_send", { confirm_token: reply.data.confirm_token });
+    log(`reply_message ok in ${reply.ms} ms: ${reply.data.preview.to.length} recipient(s), subject starts with Re: ${/^Re:/i.test(reply.data.preview.subject)}`);
+    const fwd = await tool("forward_message", { uid, to: ["e2e@example.com"], note: "e2e" });
+    if (fwd.data.preview.kind !== "forward") fail("forward_message shape");
+    await tool("cancel_send", { confirm_token: fwd.data.confirm_token });
+    log(`forward_message ok in ${fwd.ms} ms: body ${fwd.data.preview.body_text.length} chars, attachments omitted ${fwd.data.preview.attachments_omitted.length}`);
+  }
+} else {
+  log("send tools absent (SEND_ENABLED is not true on this server); skipping phase-one checks");
+}
+
 // 6. Refresh token rotation.
 const refresh = await fetch(as.token_endpoint, {
   method: "POST",

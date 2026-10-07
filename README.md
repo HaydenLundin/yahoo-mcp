@@ -10,7 +10,7 @@ Yahoo has no first-party connector in any of these tools. This fills the gap wit
 
 ## Status
 
-Milestone 4 of 7: a single Cloudflare Worker serving OAuth 2.1 (dynamic client registration, PKCE, refresh rotation), a Cloudflare Access guarded consent page, and a stateless MCP endpoint with read tools (`list_folders`, `search_messages`, `get_message`, `get_thread`, `list_drafts`), organize tools (`move_messages`, `archive_messages`, `trash_messages`, `mark_read`, `mark_unread`, `flag_messages`, `unflag_messages`), and draft tools (`create_draft`, `update_draft`, `delete_draft`). Connected and working from Claude Code against the live mailbox. Two-phase send follows in milestone 5.
+Milestone 5 of 7: a single Cloudflare Worker serving OAuth 2.1 (dynamic client registration, PKCE, refresh rotation), a Cloudflare Access guarded consent page, and a stateless MCP endpoint with read tools (`list_folders`, `search_messages`, `get_message`, `get_thread`, `list_drafts`), organize tools (`move_messages`, `archive_messages`, `trash_messages`, `mark_read`, `mark_unread`, `flag_messages`, `unflag_messages`), draft tools (`create_draft`, `update_draft`, `delete_draft`), and, when `SEND_ENABLED` is true, the two-phase send tools (`send_message`, `reply_message`, `forward_message` prepare a preview and a five-minute token; `confirm_send` delivers and files a copy in Sent; `cancel_send` discards). Connected and working from Claude Code against the live mailbox. Remaining: the client matrix (ChatGPT, Codex, Antigravity) and a hardening pass.
 
 ## Run it
 
@@ -25,7 +25,7 @@ pnpm e2e                          # exercises the full OAuth + MCP path against 
 pnpm test                         # unit tests with a mocked IMAP server
 ```
 
-Deploying: `pnpm deploy`, then set the secrets listed in `.dev.vars.example` with `wrangler secret put`, apply `pnpm db:migrate:remote`, and put a Cloudflare Access application on `<your-host>/authorize` allowing only your email. Details in [OVERVIEW.md](OVERVIEW.md#operating-it).
+Deploying: `pnpm run deploy`, then set the secrets listed in `.dev.vars.example` with `wrangler secret put`, apply `pnpm db:migrate:remote`, and put a Cloudflare Access application on `<your-host>/authorize` allowing only your email. Details in [OVERVIEW.md](OVERVIEW.md#operating-it).
 
 ## Stack
 

@@ -404,7 +404,7 @@ export function toSummary(
   };
 }
 
-async function readBody(
+export async function readBody(
   client: ImapFlow,
   msg: FetchMessageObject,
   format: "text" | "html",

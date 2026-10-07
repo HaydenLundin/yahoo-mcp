@@ -381,6 +381,21 @@ export default {
     // Experiment 1: same stalled search, but with the pipe's pause() disabled on imapflow's socket
     // (?patch=1). If it completes, Node-style backpressure is what stops the Workers socket shim.
     // Experiment 3: does setImmediate ever fire under workerd? imapflow awaits it every 10 chunks.
+    // Milestone 5 probe: connect + EHLO + AUTH + QUIT over implicit TLS with our own SMTP client. Sends nothing.
+    if (url.pathname === "/smtp") {
+      const { verifySmtp } = await import("../src/lib/smtp");
+      const t = Date.now();
+      try {
+        const r = await verifySmtp({ YAHOO_USER: env.YAHOO_USER ?? "", YAHOO_APP_PASSWORD: env.YAHOO_APP_PASSWORD ?? "" } as never);
+        return Response.json({ ok: r.ok, ehlo: r.ehlo.split(String.fromCharCode(10)).slice(0, 8), ms: Date.now() - t });
+      } catch (e) {
+        const err = e as { message?: string; code?: string };
+        return Response.json({ ok: false, error: err.message, code: err.code, ms: Date.now() - t });
+      }
+    }
+
+    // Experiment 3: does setImmediate ever fire under workerd? imapflow awaits it every 10 chunks.
+
     if (url.pathname === "/immediate") {
       const t = Date.now();
       const kind = typeof (globalThis as { setImmediate?: unknown }).setImmediate;

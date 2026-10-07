@@ -7,7 +7,7 @@ Remote MCP server exposing a single Yahoo Mail account to multiple AI clients wi
 
 The design is client-agnostic by construction: it targets the strictest client (claude.ai) and everything else is a subset.
 
-Status: **milestones 1–4 built (read, organize, draft); send tools next**. See §10 for the spike outcome and §6 for the Workers 16 KB response rule.
+Status: **milestones 1–5 built (read, organize, draft, two-phase send)**; client matrix (milestone 6) and hardening (7) remain. See §10 for the spike outcome and §6 for the Workers 16 KB response rule.
 
 ---
 
@@ -194,6 +194,10 @@ Rules:
 - Token: 32 random bytes, base64url, single-use, 5-minute TTL, row in D1 `pending_sends` with the fully rendered MIME payload.
 - `confirm_send` tool description (verbatim, matters for model behavior): *"Send a message previously prepared by send_message / reply_message / forward_message. ONLY call this after the user has explicitly confirmed the preview in the current turn. Never call it speculatively."*
 - If `SEND_ENABLED != "true"`, none of the five send tools are registered. `tools/list` simply doesn't include them.
+- A token is consumed the moment `confirm_send` reads it, before SMTP is attempted, so a retried confirm can never send twice. If SMTP then fails, the tool reports the error and the user re-prepares; nothing is silently retried.
+- `reply_message`: Reply-To wins over From; this account is never a recipient of its own reply, and replying to a message we sent goes to its original recipients. `reply_all` adds the original To and Cc minus this account.
+- `forward_message` forwards the plain text with a header block (From, Date, Subject, To) under an optional note. Attachments are never forwarded; their names are returned as `attachments_omitted` so the model can say so.
+- After a successful send the rendered message is `APPEND`ed to the `\\Sent` special-use folder with `\\Seen`, because Yahoo does not file SMTP sends itself. A failure there is reported as `saved_to_sent: false`, not as a failed send.
 
 ### 5.5 Explicitly not exposed
 `get_attachment`, `expunge`, `delete_folder`, `rename_folder`, raw `set_flags`, `create_folder`, account management, anything that reads another mailbox.
@@ -227,7 +231,7 @@ Phase-1 send tools are deliberately *not* destructive — they only write a D1 r
 - Body handling: prefer `text/plain`; if only HTML, run through a sanitizer and produce text. Cap body at 50 KB in responses; note truncation.
 
 `lib/smtp.ts`
-- `nodemailer` transport `smtp.mail.yahoo.com:465 secure:true`, same app password.
+- A ~200-line SMTP client of our own over `node:tls` to `smtp.mail.yahoo.com:465`: EHLO, AUTH PLAIN, MAIL FROM, RCPT TO, DATA (dot-stuffed), QUIT, with per-step timeouts and stable error codes (`SMTP_AUTH_FAILED`, `SMTP_RECIPIENT_REJECTED`, `SMTP_MESSAGE_REJECTED`, `SMTP_CONNECT_FAILED`). `nodemailer` was tried first and could not open a connection from Workers, locally or on the edge, while raw `node:tls` to the same port works; the IMAP side had already proven that primitive, so the sender stays on it and off a 1 MB dependency. `verifySmtp()` (connect, EHLO, AUTH, QUIT) exists for probes.
 - After send, `APPEND` raw message to Sent with `\Seen` (Yahoo does not auto-save SMTP sends).
 
 ---

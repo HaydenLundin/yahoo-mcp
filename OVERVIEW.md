@@ -108,6 +108,7 @@ Each client gets its own token. Revoking one (from the Worker's KV, or by rotati
 ## Operating it
 
 - **Rotate the Yahoo app password:** generate a new one at login.yahoo.com/account/security, then `wrangler secret put YAHOO_APP_PASSWORD`.
+- **Enable sending:** `wrangler secret put SEND_ENABLED` → `true`. The five send tools appear on every client's next request. The assistant will show you the exact recipients, subject, and text, and sends only after you confirm; the preview expires after 5 minutes.
 - **Read-only mode:** `wrangler secret put SEND_ENABLED` → `false`. Takes effect on next request.
 - **Audit:** `wrangler d1 execute yahoo_mcp --command "SELECT ts, client_name, tool, uids, outcome FROM audit_log ORDER BY ts DESC LIMIT 50"`.
 - **Kill a client:** delete its grant from `OAUTH_KV` (or use the admin endpoint once built).

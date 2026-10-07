@@ -1,5 +1,6 @@
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { authApp } from "./auth/consent";
+import { purgeExpiredPending } from "./lib/pending";
 import { mcpApp } from "./mcp/handler";
 import { SCOPES, type Env } from "./types";
 
@@ -34,6 +35,6 @@ export default {
   fetch: (request, env, ctx) => provider.fetch(request, env, ctx),
   scheduled: (_event, env, ctx) => {
     ctx.waitUntil(provider.purgeExpiredData(env, { batchSize: 100 }));
-    // Milestone 5: purge expired pending_sends here too.
+    ctx.waitUntil(purgeExpiredPending(env));
   },
 } satisfies ExportedHandler<Env>;
