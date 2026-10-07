@@ -27,6 +27,7 @@ pnpm audit:tail           # last 50 audit rows from production D1
 - `ACCESS_DEV_BYPASS=true` works only for localhost hosts. Production requires `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD`.
 - MCP is stateless: fresh `McpServer` per request, JSON responses, no Durable Objects. Send tools are registered only when `SEND_ENABLED === "true"`.
 - `pnpm deploy` is pnpm's built-in command, not our script; use `pnpm run deploy`.
+- Operator HTML lives under `/authorize/*` so one Cloudflare Access application covers it. Never add operator pages elsewhere without adding Access in front of them.
 - pnpm 10: `workerd` and `esbuild` build scripts are allowlisted in `package.json`; keep them.
 - Tests: every tool gets a fixture in `test/helpers/fixtures.ts` and a test in `test/*.test.ts` that calls it through the in-memory MCP client (`test/helpers/harness.ts`). `vi.mock("imapflow")` swaps in `FakeImapFlow`; extend the fake when a tool needs a new ImapFlow method.
 

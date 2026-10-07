@@ -1,12 +1,10 @@
 import { Hono } from "hono";
 import { html, raw } from "hono/html";
-import type { HtmlEscapedString } from "hono/utils/html";
-import {
-  AuthorizationError,
-  type AuthRequest,
-  type ClientInfo,
-} from "@cloudflare/workers-oauth-provider";
+import { secureHeaders } from "hono/secure-headers";
+import type { AuthorizationError, AuthRequest, ClientInfo } from "@cloudflare/workers-oauth-provider";
 import { requireOperator } from "./access";
+import { CONNECTIONS_PATH, registerConnectionRoutes } from "./connections";
+import { isSameOrigin, page } from "./ui";
 import {
   SCOPES,
   SCOPE_TEXT,
@@ -22,6 +20,25 @@ import {
  */
 export const authApp = new Hono<{ Bindings: Env }>();
 
+// These pages render operator-trusted HTML only. No scripts anywhere, inline styles only.
+// form-action and cross-origin-opener are deliberately NOT set: the consent POST redirects to
+// the client's callback origin, and claude.ai completes OAuth in a popup that must keep its opener.
+authApp.use(
+  "*",
+  secureHeaders({
+    contentSecurityPolicy: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:"],
+      scriptSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+      baseUri: ["'self'"],
+    },
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: false,
+  }),
+);
+
 authApp.get("/", (c) =>
   c.html(
     page(
@@ -35,6 +52,9 @@ authApp.get("/", (c) =>
         <p class="muted">
           Read, draft, organize, and send-with-approval. No attachment
           downloads, no permanent delete.
+        </p>
+        <p class="muted">
+          Operator: <a href="${CONNECTIONS_PATH}">manage connected clients</a>.
         </p>`,
     ),
   ),
@@ -109,6 +129,8 @@ authApp.on(["GET", "POST"], "/authorize", async (c) => {
   return c.redirect(redirectTo, 302);
 });
 
+registerConnectionRoutes(authApp);
+
 /** Single operator, no per-scope toggles: grant what was asked (filtered to known scopes), or everything. */
 function resolveScopes(requested: string[]): Scope[] {
   const known = requested.filter((s): s is Scope =>
@@ -117,17 +139,9 @@ function resolveScopes(requested: string[]): Scope[] {
   return known.length > 0 ? known : [...SCOPES];
 }
 
-/** CSRF guard for the consent form. Browsers always send Sec-Fetch-Site or Origin on POST. */
-function isSameOrigin(req: Request): boolean {
-  const site = req.headers.get("sec-fetch-site");
-  if (site) return site === "same-origin" || site === "none";
-  const origin = req.headers.get("origin");
-  return !origin || origin === new URL(req.url).origin;
-}
-
 /** Mirrors the provider README: render locally unless the client and redirect URI were validated. */
 function authorizationErrorResponse(err: unknown): Response {
-  if (!(err instanceof AuthorizationError)) throw err;
+  if (!isAuthorizationError(err)) throw err;
   if (!err.redirectUri)
     return new Response(`${err.code}: ${err.description}`, { status: 400 });
   const redirect = new URL(err.redirectUri);
@@ -136,6 +150,18 @@ function authorizationErrorResponse(err: unknown): Response {
   if (err.state) redirect.searchParams.set("state", err.state);
   if (err.issuer) redirect.searchParams.set("iss", err.issuer);
   return Response.redirect(redirect.toString(), 302);
+}
+
+/**
+ * Shape check instead of instanceof so this module has no runtime import of the provider
+ * package (which imports `cloudflare:workers` at load time and cannot run under Node in tests).
+ */
+function isAuthorizationError(err: unknown): err is AuthorizationError {
+  return (
+    err instanceof Error &&
+    typeof (err as { code?: unknown }).code === "string" &&
+    typeof (err as { description?: unknown }).description === "string"
+  );
 }
 
 interface ConsentView {
@@ -191,97 +217,4 @@ function consentPage({
         </div>
       </form>`,
   );
-}
-
-function page(
-  title: string,
-  body: HtmlEscapedString | Promise<HtmlEscapedString> | string,
-) {
-  return html`<!doctype html>
-    <html lang="en">
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>${title}</title>
-        <style>
-          :root {
-            color-scheme: light dark;
-          }
-          body {
-            margin: 0;
-            min-height: 100vh;
-            display: grid;
-            place-items: center;
-            font-family:
-              system-ui,
-              -apple-system,
-              "Segoe UI",
-              sans-serif;
-            background: #f4f4f5;
-            color: #18181b;
-          }
-          .card {
-            background: #fff;
-            border-radius: 12px;
-            padding: 2rem;
-            max-width: 32rem;
-            width: calc(100% - 2rem);
-            box-sizing: border-box;
-            box-shadow: 0 1px 3px rgb(0 0 0 / 0.15);
-          }
-          h1 {
-            font-size: 1.25rem;
-            line-height: 1.4;
-            margin: 0 0 1rem;
-          }
-          ul {
-            padding-left: 1.2rem;
-            margin: 0.5rem 0 0;
-          }
-          li {
-            margin: 0.5rem 0;
-          }
-          .muted {
-            opacity: 0.7;
-            font-size: 0.9rem;
-          }
-          .actions {
-            display: flex;
-            gap: 0.75rem;
-            margin-top: 1.5rem;
-          }
-          button {
-            font: inherit;
-            padding: 0.6rem 1.2rem;
-            border-radius: 8px;
-            border: 1px solid transparent;
-            cursor: pointer;
-          }
-          .approve {
-            background: #2563eb;
-            color: #fff;
-          }
-          .deny {
-            background: transparent;
-            border-color: currentColor;
-            color: inherit;
-          }
-          code {
-            font-size: 0.9em;
-          }
-          @media (prefers-color-scheme: dark) {
-            body {
-              background: #18181b;
-              color: #f4f4f5;
-            }
-            .card {
-              background: #27272a;
-            }
-          }
-        </style>
-      </head>
-      <body>
-        <main class="card">${body}</main>
-      </body>
-    </html>`;
 }

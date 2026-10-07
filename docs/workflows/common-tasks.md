@@ -57,7 +57,7 @@ claude mcp add --transport http yahoo https://yahoo-mcp.clthrl.workers.dev/mcp
 
 ## Revoke one client
 
-Until the admin endpoint exists: list grants in the Cloudflare dashboard under the `OAUTH_KV` namespace (keys prefixed `grant:`), delete the grant and its tokens. Rotating the Yahoo app password revokes everyone at once.
+Open `https://yahoo-mcp.clthrl.workers.dev/authorize/connections`, sign in through Cloudflare Access, and press Revoke on the client's row. Its tokens stop working immediately and it must sign in and consent again. Rotating the Yahoo app password revokes everyone at once.
 
 ## Add a tool
 

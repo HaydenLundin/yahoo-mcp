@@ -72,10 +72,10 @@ The Worker lives at `https://yahoo-mcp.clthrl.workers.dev`; the MCP endpoint is 
 | Client | Status |
 |---|---|
 | Claude Code | verified 2026-10-07: read, organize, draft, and send tools work against the live mailbox |
-| claude.ai web, iOS, Android, Claude Desktop | server side ready (DCR, PKCE S256, CIMD, refresh rotation); connect per the steps below |
-| ChatGPT web and mobile | server side ready, including the `search` and `fetch` aliases ChatGPT connectors expect; needs Developer mode on a paid plan |
-| Codex CLI | server side ready (loopback redirect URIs accepted) |
-| Antigravity CLI | tier two, not yet tried |
+| claude.ai web, iOS, Android, Claude Desktop | verified 2026-10-07 |
+| ChatGPT web and mobile | verified 2026-10-07 (Developer mode, paid plan); `search` and `fetch` aliases included |
+| Codex CLI | server side ready (loopback redirect URIs accepted); not yet tried |
+| Antigravity CLI | not planned at this time |
 
 Replace `<host>` with `yahoo-mcp.clthrl.workers.dev` in the snippets below.
 
@@ -121,8 +121,9 @@ Each client gets its own token. Revoking one (from the Worker's KV, or by rotati
 - **Enable sending:** `wrangler secret put SEND_ENABLED` → `true`. The five send tools appear on every client's next request. The assistant will show you the exact recipients, subject, and text, and sends only after you confirm; the preview expires after 5 minutes.
 - **Read-only mode:** `wrangler secret put SEND_ENABLED` → `false`. Takes effect on next request.
 - **Audit:** `wrangler d1 execute yahoo_mcp --command "SELECT ts, client_name, tool, uids, outcome FROM audit_log ORDER BY ts DESC LIMIT 50"`.
-- **Kill a client:** delete its grant from `OAUTH_KV` (or use the admin endpoint once built).
+- **Revoke a client:** open `https://yahoo-mcp.clthrl.workers.dev/authorize/connections` (behind the same Cloudflare Access sign-in as the consent page). Each row is one connected client with its scopes, when it was granted, and its last audited activity; Revoke invalidates its tokens immediately. Rotating the Yahoo app password revokes everyone at once.
 - **Logs:** Workers observability is enabled; `wrangler tail` streams live.
+- **Abuse protection:** the token and registration endpoints are rate limited per IP (30 and 5 requests per minute); a throttled caller gets HTTP 429 with `Retry-After`. Nothing else is reachable without a bearer token or the Access sign-in.
 
 ---
 

@@ -3,11 +3,11 @@
 Remote MCP server exposing a single Yahoo Mail account to multiple AI clients with Gmail-connector-parity permissions.
 
 **Tier-1 clients (tested before each release):** claude.ai web/mobile, Claude Desktop, Claude Code, ChatGPT web/mobile, OpenAI Codex CLI.
-**Tier-2 (should work, verified once):** Google Antigravity CLI (`agy`, successor to Gemini CLI), Cursor, Windsurf, any client that speaks Streamable HTTP + OAuth 2.1 with DCR.
+**Tier-2 (should work, verified once):** Cursor, Windsurf, any client that speaks Streamable HTTP + OAuth 2.1 with DCR. Google Antigravity CLI is not planned at this time (operator decision, 2026-10-07); its notes below are kept for reference.
 
 The design is client-agnostic by construction: it targets the strictest client (claude.ai) and everything else is a subset.
 
-Status: **milestones 1–6 built**; `search`/`fetch` aliases shipped, per-client setup documented in OVERVIEW.md; hardening (milestone 7) remains. See §10 for the spike outcome and §6 for the Workers 16 KB response rule.
+Status: **all seven milestones built.** Verified live from Claude Code, claude.ai (web and mobile), and ChatGPT. Appendix §13 lists the stable error codes. See §10 for the spike outcome and §6 for the Workers 16 KB response rule.
 
 ---
 
@@ -329,7 +329,9 @@ Tests run in plain vitest rather than `@cloudflare/vitest-pool-workers`: the too
 - Prompt injection is the primary threat model (email bodies are attacker-controlled input read by the model). Mitigations: send is two-phase with user-in-the-loop; no attachment content; no permanent delete; `SEND_ENABLED` kill switch; audit log ties every write to a `client_id`.
 - No `Origin`-less POSTs accepted on `/mcp`.
 - Consent page is behind Cloudflare Access; a stolen OAuth client cannot complete a grant without the operator's identity.
-- Rate limit `/token` and `/register` (Workers Rate Limiting binding, free).
+- Rate limit `/token` and `/register` (Workers Rate Limiting bindings, free): 30 and 5 requests per minute per connecting IP, HTTP 429 with `Retry-After` beyond that (`src/lib/ratelimit.ts`). Both are the only endpoints an anonymous caller can POST to.
+- Operator console at `/authorize/connections` (covered by the same Access application as `/authorize`): lists grants with last audited activity and revokes one client's tokens. CSRF-guarded like the consent form.
+- Operator pages send a Content-Security-Policy with no scripts and `frame-ancestors 'none'`; `form-action` and a cross-origin-opener policy are deliberately omitted because the consent POST redirects to the client's origin and claude.ai completes OAuth in a popup that needs its opener.
 
 ---
 
@@ -376,11 +378,35 @@ Notes from the spike:
 4. Organize + draft tools + audit log.
 5. Send tools (two-phase) + cron purge + `SEND_ENABLED` gate.
 6. Connect ChatGPT (web → verify on phone) and Codex CLI. Add tool annotations (§5.6). Optional `search`/`fetch` aliases. Then Antigravity CLI as Tier-2. Document per-client setup in OVERVIEW.md.
-7. Hardening pass: rate limits, Origin check, error codes, README.
+7. Hardening pass: rate limits, Origin check, error codes, README. Done 2026-10-07: per-IP limits on `/token` and `/register`, operator revocation console, security headers, error-code appendix, README rewrite.
 
 ---
 
-## 12. References
+## 12. Error codes
+
+Every tool error is returned as `CODE: message` in a single text content item with `isError: true`, so a model can branch on the code and read the message. OAuth endpoints use standard OAuth error responses; throttling is HTTP 429 `slow_down`.
+
+| Code | Meaning | Typical cause |
+|---|---|---|
+| `INVALID_ARGUMENT` | an argument failed validation beyond the JSON schema | bad date, bad email address, malformed id |
+| `NOT_FOUND` | no message with that uid in that folder | stale uid after a move, wrong folder |
+| `FOLDER_NOT_FOUND` | Yahoo reported no folder with the needed special-use flag | unusual account layout |
+| `NO_RECIPIENT` | a reply has nobody to go to | original has no usable address |
+| `IMAP_AUTH_FAILED` | Yahoo rejected the app password | revoked or mistyped app password |
+| `IMAP_RATE_LIMITED` | Yahoo is throttling logins for the account | too many tool calls in a short time |
+| `IMAP_CONNECT_FAILED` | could not reach or lost the IMAP server | network, timeout, server closed |
+| `IMAP_SEARCH_FAILED`, `IMAP_MOVE_FAILED`, `IMAP_STORE_FAILED`, `IMAP_APPEND_FAILED`, `IMAP_DELETE_FAILED` | Yahoo refused that command | server-side policy or state |
+| `IMAP_<RESPONSE-CODE>` | Yahoo returned a standard response code, surfaced verbatim | `IMAP_NONEXISTENT`, `IMAP_TRYCREATE` |
+| `SMTP_AUTH_FAILED` | Yahoo SMTP rejected the app password | as above |
+| `SMTP_RECIPIENT_REJECTED` | every recipient was refused | bad address, relaying denied |
+| `SMTP_MESSAGE_REJECTED` | Yahoo refused the sender or the message data | policy, size |
+| `SMTP_CONNECT_FAILED` | could not reach SMTP, or it closed or timed out | network |
+| `SMTP_FAILED` | any other SMTP reply | unexpected server behaviour |
+| `CONFIRM_TOKEN_INVALID` | unknown, used, cancelled, or another client's token | model retried a confirm |
+| `CONFIRM_TOKEN_EXPIRED` | the five-minute window passed | slow confirmation |
+| `INTERNAL` | anything not mapped above | bug; check the Worker log |
+
+## 13. References
 
 - claude.ai custom connectors: https://claude.com/docs/connectors/building
 - ChatGPT developer mode / MCP apps: https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt

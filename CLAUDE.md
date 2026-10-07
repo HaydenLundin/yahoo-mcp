@@ -34,7 +34,8 @@ pnpm audit:tail           # last 50 audit rows from production D1
 - MCP is stateless: a fresh `McpServer` per request, JSON responses, no session ids, no Durable Objects. That is what lets `SEND_ENABLED` take effect on the next request.
 - Every tool body runs inside `runTool()`: errors become stable `CODE: message` tool errors and an audit row is written in the background. Never write to D1 or catch IMAP errors ad hoc inside a tool.
 - Server-side MCP clients send no `Origin` header; the `/mcp` origin check only rejects a present, non-allowlisted origin.
-- Production hostname: `https://yahoo-mcp.clthrl.workers.dev` (workers.dev subdomain `clthrl`). Cloudflare Access is scoped to `/authorize` only.
+- Production hostname: `https://yahoo-mcp.clthrl.workers.dev` (workers.dev subdomain `clthrl`). Cloudflare Access is scoped to `/authorize` and everything beneath it, which is why the operator console lives at `/authorize/connections`.
+- `/token` and `/register` are rate limited per IP through Workers Rate Limiting bindings (`src/lib/ratelimit.ts`); the gate is a no-op when a binding is absent, so tests and stripped configs still run.
 - Tests: `pnpm test` runs vitest in the node environment; `test/helpers/fake-imap.ts` stands in for ImapFlow via `vi.mock("imapflow")`, and `test/helpers/harness.ts` wires `buildServer()` to an in-memory MCP client so tools are exercised exactly as a client sees them. `scripts/e2e-oauth.mjs` covers the real runtime path against `wrangler dev`. Add a fixture and a test for every new tool.
 - Audit writes are awaited inside `runTool()`, never deferred with `waitUntil`, so a row exists before the client sees the result.
 - Send tools register only when `SEND_ENABLED === "true"`; locally that is `.dev.vars`, in production a secret. The e2e script never calls `confirm_send`; a real send needs the operator's explicit go-ahead.

@@ -3,10 +3,49 @@
   "name": "yahoo-mcp",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
-  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "compatibility_flags": [
+    "nodejs_compat",
+    "global_fetch_strictly_public"
+  ],
   "workers_dev": true,
-  "observability": { "enabled": true },
-  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "08b3f3e2460d4f92a42b283d2617752e" }],
-  "d1_databases": [{ "binding": "DB", "database_name": "yahoo_mcp", "database_id": "28a6a2f4-a4da-472d-9913-4d17b6089f71", "migrations_dir": "migrations" }],
-  "triggers": { "crons": ["*/10 * * * *"] }
+  "observability": {
+    "enabled": true
+  },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "08b3f3e2460d4f92a42b283d2617752e"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "yahoo_mcp",
+      "database_id": "28a6a2f4-a4da-472d-9913-4d17b6089f71",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "TOKEN_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
+    },
+    {
+      "name": "REGISTER_RATE_LIMITER",
+      "namespace_id": "1002",
+      "simple": {
+        "limit": 5,
+        "period": 60
+      }
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "*/10 * * * *"
+    ]
+  }
 }

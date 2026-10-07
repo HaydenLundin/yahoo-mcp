@@ -24,9 +24,16 @@ export interface PendingRowRecord {
   expires_at: number;
 }
 
+interface ExecResult {
+  changes: number;
+  first: unknown;
+  results: unknown[];
+}
+
 /**
- * Minimal D1 stand-in. Understands exactly the statements the code issues: audit_log inserts,
- * and insert / select-by-token / delete / purge on pending_sends.
+ * Minimal D1 stand-in. Understands exactly the statements the code issues: audit_log inserts
+ * and the per-client activity rollup, and insert / select-by-token / delete / purge on
+ * pending_sends.
  */
 export class FakeD1 {
   rows: AuditRow[] = [];
@@ -34,7 +41,7 @@ export class FakeD1 {
   failNext = false;
 
   prepare(sql: string) {
-    const exec = async (values: unknown[]) => {
+    const exec = async (values: unknown[]): Promise<ExecResult> => {
       if (this.failNext) {
         this.failNext = false;
         throw new Error("D1_ERROR: simulated failure");
@@ -59,7 +66,26 @@ export class FakeD1 {
           uids,
           outcome,
         });
-        return { changes: 1, first: null };
+        return { changes: 1, first: null, results: [] };
+      }
+      if (
+        sql.startsWith(
+          "SELECT client_id, MAX(ts) AS last_ts, COUNT(*) AS calls FROM audit_log GROUP BY client_id",
+        )
+      ) {
+        const by = new Map<string, { last_ts: number; calls: number }>();
+        for (const r of this.rows) {
+          const cur = by.get(r.client_id) ?? { last_ts: 0, calls: 0 };
+          by.set(r.client_id, {
+            last_ts: Math.max(cur.last_ts, r.ts),
+            calls: cur.calls + 1,
+          });
+        }
+        const results = [...by.entries()].map(([client_id, v]) => ({
+          client_id,
+          ...v,
+        }));
+        return { changes: 0, first: results[0] ?? null, results };
       }
       if (sql.startsWith("INSERT INTO pending_sends")) {
         const [token, client_id, kind, preview, mime, created_at, expires_at] =
@@ -81,25 +107,23 @@ export class FakeD1 {
           created_at,
           expires_at,
         });
-        return { changes: 1, first: null };
+        return { changes: 1, first: null, results: [] };
       }
       if (
         sql.startsWith("SELECT") &&
         sql.includes("FROM pending_sends WHERE token = ?1")
       ) {
         const row = this.pending.get(values[0] as string) ?? null;
-        return {
-          changes: 0,
-          first: row
-            ? {
-                ...row,
-                mime: row.mime.buffer.slice(
-                  row.mime.byteOffset,
-                  row.mime.byteOffset + row.mime.byteLength,
-                ),
-              }
-            : null,
-        };
+        const first = row
+          ? {
+              ...row,
+              mime: row.mime.buffer.slice(
+                row.mime.byteOffset,
+                row.mime.byteOffset + row.mime.byteLength,
+              ),
+            }
+          : null;
+        return { changes: 0, first, results: first ? [first] : [] };
       }
       if (
         sql.startsWith(
@@ -109,14 +133,15 @@ export class FakeD1 {
         const row = this.pending.get(values[0] as string);
         if (row && row.client_id === values[1]) {
           this.pending.delete(row.token);
-          return { changes: 1, first: null };
+          return { changes: 1, first: null, results: [] };
         }
-        return { changes: 0, first: null };
+        return { changes: 0, first: null, results: [] };
       }
       if (sql.startsWith("DELETE FROM pending_sends WHERE token = ?1")) {
         return {
           changes: this.pending.delete(values[0] as string) ? 1 : 0,
           first: null,
+          results: [],
         };
       }
       if (sql.startsWith("DELETE FROM pending_sends WHERE expires_at < ?1")) {
@@ -127,18 +152,25 @@ export class FakeD1 {
             n++;
           }
         }
-        return { changes: n, first: null };
+        return { changes: n, first: null, results: [] };
       }
       throw new Error(`FakeD1: unsupported SQL: ${sql}`);
     };
-    return {
-      bind: (...values: unknown[]) => ({
-        run: async () => {
-          const r = await exec(values);
-          return { success: true, meta: { changes: r.changes } };
-        },
-        first: async <T>() => (await exec(values)).first as T | null,
+    const statement = (values: unknown[]) => ({
+      run: async () => {
+        const r = await exec(values);
+        return { success: true, meta: { changes: r.changes } };
+      },
+      first: async <T>() => (await exec(values)).first as T | null,
+      all: async <T>() => ({
+        results: (await exec(values)).results as T[],
+        success: true,
+        meta: {},
       }),
+    });
+    return {
+      bind: (...values: unknown[]) => statement(values),
+      ...statement([]),
     };
   }
 }

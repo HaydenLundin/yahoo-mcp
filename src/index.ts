@@ -1,6 +1,7 @@
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { authApp } from "./auth/consent";
 import { purgeExpiredPending } from "./lib/pending";
+import { rateLimitGate } from "./lib/ratelimit";
 import { mcpApp } from "./mcp/handler";
 import { SCOPES, type Env } from "./types";
 
@@ -8,7 +9,7 @@ import { SCOPES, type Env } from "./types";
  * One Worker, three responsibilities (ARCHITECTURE.md section 3):
  *  - OAuth 2.1 authorization server for MCP clients (this wrapper; state in OAUTH_KV)
  *  - MCP endpoint at /mcp (mcpApp; bearer-protected by the wrapper)
- *  - consent UI at /authorize (authApp; guarded by Cloudflare Access)
+ *  - consent UI and operator console at /authorize (authApp; guarded by Cloudflare Access)
  * Resource metadata (RFC 9728) is derived from the request, so the same code serves
  * localhost during development and the workers.dev hostname in production.
  */
@@ -32,8 +33,13 @@ const provider = new OAuthProvider<Env>({
 });
 
 export default {
-  fetch: (request, env, ctx) => provider.fetch(request, env, ctx),
-  scheduled: (_event, env, ctx) => {
+  async fetch(request, env, ctx) {
+    // Per-IP throttle on the two endpoints anyone on the internet can POST to.
+    const limited = await rateLimitGate(request, env);
+    if (limited) return limited;
+    return provider.fetch(request, env, ctx);
+  },
+  scheduled(_event, env, ctx) {
     ctx.waitUntil(provider.purgeExpiredData(env, { batchSize: 100 }));
     ctx.waitUntil(purgeExpiredPending(env));
   },

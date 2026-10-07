@@ -6,6 +6,9 @@ export interface Env {
   DB: D1Database;
   /** Injected by @cloudflare/workers-oauth-provider. */
   OAUTH_PROVIDER: OAuthHelpers;
+  /** Workers Rate Limiting bindings for the unauthenticated OAuth endpoints; optional so tests and stripped configs still run. */
+  TOKEN_RATE_LIMITER?: RateLimit;
+  REGISTER_RATE_LIMITER?: RateLimit;
 
   YAHOO_USER: string;
   YAHOO_APP_PASSWORD: string;
