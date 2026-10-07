@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeImapFlow } from "./helpers/fake-imap";
 import { bigFolder, yahooFolders } from "./helpers/fixtures";
+import { IMAP_CHUNK_BYTES } from "../src/lib/imap";
 import { startHarness, type Harness } from "./helpers/harness";
 
 vi.mock("imapflow", async () => {
@@ -214,15 +215,15 @@ describe("get_message", () => {
         { filename: "logo.png", mime: "image/png", size: 2_048 },
       ],
     });
-    expect(FakeImapFlow.calls.some((c) => c.startsWith("bodyPart:102:1.1:0:12000"))).toBe(true);
+    expect(FakeImapFlow.calls.some((c) => c.startsWith(`bodyPart:102:1.1:0:${IMAP_CHUNK_BYTES}`))).toBe(true);
     expect(FakeImapFlow.calls.some((c) => c.startsWith("bodyPart:102:2:"))).toBe(false);
   });
 
-  it("fetches bodies in 12 KB byte ranges, never through imapflow download()", async () => {
+  it("fetches bodies in bounded byte ranges, never through imapflow download()", async () => {
     const { data } = await h.call("get_message", { uid: 104 });
     const ranges = FakeImapFlow.calls.filter((c) => c.startsWith("bodyPart:104:1:")).map((c) => c.split(":").slice(3).join(":"));
-    expect(ranges.slice(0, 3)).toEqual(["0:12000", "12000:12000", "24000:12000"]);
-    expect(ranges.length).toBeGreaterThanOrEqual(7);
+    expect(ranges.slice(0, 2)).toEqual([`0:${IMAP_CHUNK_BYTES}`, `${IMAP_CHUNK_BYTES}:${IMAP_CHUNK_BYTES}`]);
+    expect(ranges.length).toBeGreaterThanOrEqual(2);
     expect((data as { body: string }).body.startsWith("xxxxxxxxxx")).toBe(true);
     expect(FakeImapFlow.calls.some((c) => c.startsWith("download:"))).toBe(false);
   });

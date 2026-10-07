@@ -6,20 +6,20 @@ import { decodeBody, type BodyPart } from "./mime";
 const YAHOO_IMAP = { host: "imap.mail.yahoo.com", port: 993 } as const;
 
 /**
- * Workers constraint, verified on local workerd and on the real edge (2026-10-06): a single IMAP
- * response line or literal larger than ~16 KB never finishes arriving. The command stalls until
- * socketTimeout and the connection is dead afterwards. Multi-line responses of any total size are
- * fine. Two rules follow from this and every tool must respect them:
- *  - searches are windowed by message sequence number (pagedSearch), so a `* SEARCH` line never
- *    carries more than SEARCH_WINDOW uids (about 8 KB);
- *  - body parts are fetched in explicit byte ranges of IMAP_CHUNK_BYTES (downloadText), so no
- *    literal exceeds the limit. imapflow's own download() is not used: for single-part messages it
- *    also fetches the whole message header block, and Yahoo's headers alone can exceed 16 KB.
- * Where the fault lives (2026-10-07): raw node:tls sockets on Workers deliver a 70 KB line fine,
- * including through pipe() into a Transform with real backpressure, idle timeouts, and keepalive.
- * The stall is inside imapflow's handling of a long response line and is being reported upstream.
+ * The "16 KB stall", found 2026-10-06 and solved 2026-10-07. Symptom: a single IMAP response
+ * line or literal over ~16 KB never finished arriving on Workers (local and edge); the command
+ * stalled to socketTimeout and the connection died. Cause: imapflow negotiates COMPRESS=DEFLATE
+ * with Yahoo and pipes the socket through node:zlib's streaming inflater with a 16 KB chunkSize;
+ * workerd's inflater stops producing output once one input chunk inflates past that buffer.
+ * Highly compressible data (uid lists, text bodies) hit it, less compressible data (envelopes) did
+ * not, which is why it looked like a size threshold. Fix: disableCompression below. Raw node:tls
+ * sockets were verified fine throughout (spike/index.ts: /raw, /rawpipe).
+ *
+ * pagedSearch and the ranged body fetches predate the fix and stay as defence in depth: they bound
+ * response sizes and round trips, and the ranged fetch also sidesteps imapflow's download(), which
+ * fetches the whole header block for single-part messages.
  */
-export const IMAP_CHUNK_BYTES = 12_000;
+export const IMAP_CHUNK_BYTES = 60_000;
 export const SEARCH_WINDOW = 1000;
 
 export interface ImapContext {
@@ -50,6 +50,10 @@ export async function withImap<T>(
     connectionTimeout: 15_000,
     greetingTimeout: 15_000,
     socketTimeout: 30_000,
+    // THE fix for the 16 KB stall (see the note above). imapflow enables COMPRESS=DEFLATE after
+    // login because Yahoo advertises it, and workerd's streaming node:zlib inflater stops delivering
+    // once a single input chunk inflates past its 16 KB output buffer. Plain TLS has no such limit.
+    disableCompression: true,
   });
   // A failed command can leave the socket to time out later; without a listener that
   // surfaces as an uncaught exception in the Worker log long after the response was sent.
