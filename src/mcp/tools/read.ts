@@ -369,7 +369,7 @@ function parseDate(value: string, field: string): Date {
   return d;
 }
 
-async function fetchSummaries(
+export async function fetchSummaries(
   client: ImapFlow,
   uids: number[],
   folder: string,

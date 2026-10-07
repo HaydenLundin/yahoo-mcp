@@ -304,6 +304,19 @@ describe("reply_message", () => {
     });
   });
 
+  it("answers a note-to-self to ourselves instead of failing", async () => {
+    FakeImapFlow.folder("INBOX").messages.push({
+      uid: 110,
+      flags: [],
+      envelope: { date: new Date("2026-10-07T12:00:00Z"), subject: "note", messageId: "<n1@yahoo.com>", from: [{ address: "me@yahoo.com" }], to: [{ address: "me@yahoo.com" }] },
+      structure: { type: "text/plain", encoding: "7bit" },
+      headers: "Message-ID: <n1@yahoo.com>\r\n",
+      parts: { "1": "remember" },
+    });
+    const { data } = await h.call("reply_message", { uid: 110, body_text: "done" });
+    expect((data as Staged).preview).toMatchObject({ to: ["me@yahoo.com"], cc: [], subject: "Re: note" });
+  });
+
   it("reports NOT_FOUND for an unknown uid and stores nothing", async () => {
     const { data } = await h.call("reply_message", {
       uid: 999,

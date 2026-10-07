@@ -7,7 +7,7 @@ Remote MCP server exposing a single Yahoo Mail account to multiple AI clients wi
 
 The design is client-agnostic by construction: it targets the strictest client (claude.ai) and everything else is a subset.
 
-Status: **milestones 1–5 built (read, organize, draft, two-phase send)**; client matrix (milestone 6) and hardening (7) remain. See §10 for the spike outcome and §6 for the Workers 16 KB response rule.
+Status: **milestones 1–6 built**; `search`/`fetch` aliases shipped, per-client setup documented in OVERVIEW.md; hardening (milestone 7) remains. See §10 for the spike outcome and §6 for the Workers 16 KB response rule.
 
 ---
 
@@ -208,7 +208,7 @@ Every tool declares annotations. ChatGPT uses them to decide whether to prompt t
 
 | Tools | `readOnlyHint` | `destructiveHint` | `idempotentHint` | `openWorldHint` |
 |---|---|---|---|---|
-| all §5.1 read tools | `true` | `false` | `true` | `false` |
+| all §5.1 read tools, and the `search` / `fetch` aliases (§2.1) | `true` | `false` | `true` | `false` |
 | `create_draft`, `update_draft` | `false` | `false` | `false` | `false` |
 | `delete_draft` | `false` | `true` | `true` | `false` |
 | §5.3 organize tools | `false` | `false` | `true` | `false` |

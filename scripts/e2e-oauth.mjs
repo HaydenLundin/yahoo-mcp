@@ -210,6 +210,17 @@ if (search.data.messages.length) {
 const drafts = await tool("list_drafts", { limit: 5 });
 log(`list_drafts ok in ${drafts.ms} ms: ${drafts.data.messages.length} of ${drafts.data.total} in ${drafts.data.folder}`);
 
+// 5b2. ChatGPT connector aliases.
+const alias = await tool("search", { query: "order" });
+if (!Array.isArray(alias.data.results)) fail("search alias shape");
+for (const r of alias.data.results) if (!/^[^:]+:\d+$/.test(r.id) || !r.title || !/^https:\/\//.test(r.url)) fail("search result shape");
+log(`search alias ok in ${alias.ms} ms: ${alias.data.results.length} result(s)`);
+if (alias.data.results.length) {
+  const fetched = await tool("fetch", { id: alias.data.results[0].id });
+  if (fetched.data.id !== alias.data.results[0].id || typeof fetched.data.text !== "string" || !fetched.data.metadata) fail("fetch alias shape");
+  log(`fetch alias ok in ${fetched.ms} ms: text ${fetched.data.text.length} chars, ${fetched.data.metadata.attachments.length} attachment name(s)`);
+}
+
 // 5c. Write tools, self-cleaning: a draft is created, updated, listed, and deleted; the newest
 // message gets flagged and unflagged and its read state toggled and restored. Nothing is moved.
 const stamp = `yahoo-mcp e2e ${new Date().toISOString()}`;

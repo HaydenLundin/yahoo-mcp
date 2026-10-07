@@ -67,7 +67,17 @@ Time cost: roughly a weekend for a working read/organize connector, another for 
 
 ## Connecting a client
 
-Replace `<host>` with your Worker URL (e.g. `yahoo-mcp.<you>.workers.dev`).
+The Worker lives at `https://yahoo-mcp.clthrl.workers.dev`; the MCP endpoint is `https://yahoo-mcp.clthrl.workers.dev/mcp`. Every client goes through the same OAuth flow: a Cloudflare Access sign-in (your Cloudflare account), then a consent page listing what the client may do, then Allow.
+
+| Client | Status |
+|---|---|
+| Claude Code | verified 2026-10-07: read, organize, draft, and send tools work against the live mailbox |
+| claude.ai web, iOS, Android, Claude Desktop | server side ready (DCR, PKCE S256, CIMD, refresh rotation); connect per the steps below |
+| ChatGPT web and mobile | server side ready, including the `search` and `fetch` aliases ChatGPT connectors expect; needs Developer mode on a paid plan |
+| Codex CLI | server side ready (loopback redirect URIs accepted) |
+| Antigravity CLI | tier two, not yet tried |
+
+Replace `<host>` with `yahoo-mcp.clthrl.workers.dev` in the snippets below.
 
 **claude.ai (web, iOS, Android) and Claude Desktop**
 Settings → Connectors → Add custom connector → URL `https://<host>/mcp` → Connect. You'll be sent through Cloudflare Access (sign in with your email), then a consent page. Done — it syncs to the phone app automatically.
@@ -81,7 +91,7 @@ Type `/mcp` in a session; the first call opens the browser for OAuth.
 **ChatGPT (web, iOS, Android)**
 Requires a paid plan. On the web: Settings → Apps & Connectors → Advanced → turn on **Developer mode** → Create → name `Yahoo`, URL `https://<host>/mcp`, authentication **OAuth** → complete sign-in. In each new chat, open the tools/connector picker and enable Yahoo. The connector is account-level, so it shows up in the mobile app too. Note: OpenAI reshuffled these menus several times in 2026; if the labels differ, look for the Developer mode toggle.
 
-ChatGPT will ask before running any tool not marked read-only, so you'll get its native prompt at `confirm_send` on top of the preview step.
+ChatGPT will ask before running any tool not marked read-only, so you'll get its native prompt at `confirm_send` on top of the preview step. The server also exposes `search` and `fetch`, the two tool names ChatGPT's connector framework has required for research-style connectors; they are read-only aliases of `search_messages` and `get_message`, so ChatGPT can use the connector either way.
 
 **Codex CLI**
 ```powershell

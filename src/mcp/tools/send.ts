@@ -382,7 +382,8 @@ interface EnvelopeLike {
 
 /**
  * Who a reply goes to. Reply-To wins over From. This account is never a recipient of its own
- * reply; replying to a message we sent ourselves goes to its original recipients instead.
+ * reply; replying to a message we sent ourselves goes to its original recipients instead, and a
+ * message from us to us (a note to self) is answered to ourselves.
  */
 function replyRecipients(
   env: EnvelopeLike,
@@ -399,6 +400,8 @@ function replyRecipients(
     fmt(env.replyTo?.length ? env.replyTo : env.from).filter(notSelf),
   );
   if (to.length === 0) to = dedupe(fmt(env.to).filter(notSelf));
+  // A note to self has no one else on it: reply to the only participant, ourselves.
+  if (to.length === 0) to = dedupe(fmt(env.replyTo?.length ? env.replyTo : env.from));
   const cc = replyAll
     ? dedupe(
         [...fmt(env.to), ...fmt(env.cc)]
