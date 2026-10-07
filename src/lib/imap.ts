@@ -13,9 +13,10 @@ const YAHOO_IMAP = { host: "imap.mail.yahoo.com", port: 993 } as const;
  * after finding its queue empty, and on workerd the next chunk is delivered inside that gap and is
  * never processed (postalsys/imapflow#408, fixed in 2.1.0). COMPRESS=DEFLATE makes the race
  * near-certain because the inflater hands over several 16 KiB chunks per socket read; plain TLS
- * delivers one chunk per read, so disabling compression below sidesteps it. A standalone inflate
- * test (spike/zlib-lab) shows workerd's zlib itself is fine. Once imapflow is upgraded past 2.1.0
- * the option can go.
+ * delivers one chunk per read, so disabling compression hid it for a while. A standalone inflate
+ * test (spike/zlib-lab) shows workerd's zlib itself is fine. Upgraded to imapflow 2.2.8 on
+ * 2026-10-07 and compression left at the library default (on) after the spike probe and the e2e
+ * passed with it; if large responses ever stall again, check imapflow's input loop before zlib.
  *
  * pagedSearch and the ranged body fetches predate the fix and stay as defence in depth: they bound
  * response sizes and round trips, and the ranged fetch also sidesteps imapflow's download(), which
@@ -52,11 +53,6 @@ export async function withImap<T>(
     connectionTimeout: 15_000,
     greetingTimeout: 15_000,
     socketTimeout: 30_000,
-    // Workaround for the 16 KB stall (see the note above): imapflow 2.0.x drops a chunk that
-    // arrives while its input loop is winding down, and the inflater behind COMPRESS=DEFLATE
-    // produces exactly that timing. Plain TLS delivers one chunk per read and does not. Revisit
-    // after upgrading imapflow past 2.1.0.
-    disableCompression: true,
   });
   // A failed command can leave the socket to time out later; without a listener that
   // surfaces as an uncaught exception in the Worker log long after the response was sent.

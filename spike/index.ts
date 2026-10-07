@@ -438,6 +438,40 @@ export default {
     // ?mode=flow reads in flowing mode; ?mode=pause pauses after the first chunk and resumes 100 ms later.
     // Experiment 4: raw socket piped into a Transform that defers its callback like imapflow's
     // parser does (?patch=1 disables pause on the socket). Separates stream machinery from imapflow.
+    if (url.pathname === "/ranged") {
+      // Mirror of src/lib/imap.ts downloadText: fixed-size BODY.PEEK[part]<start.len> windows until a
+      // short one. Reports every raw window length so a window that comes back short can be told apart
+      // from a legitimately short tail. ?nocompress=1 turns COMPRESS=DEFLATE off for comparison.
+      const uid = Number(url.searchParams.get("uid"));
+      const part = (url.searchParams.get("part") ?? "2").toLowerCase();
+      const chunk = Number(url.searchParams.get("chunk") ?? 60_000);
+      const noCompress = url.searchParams.get("nocompress") === "1";
+      const rlog: LogEntry[] = [];
+      const t0 = Date.now();
+      const res = await session(
+        env,
+        rlog,
+        async (c, step) => {
+          if (!c.mailbox) await c.mailboxOpen("INBOX");
+          const lengths: number[] = [];
+          let received = 0;
+          for (let i = 0; i < 40; i++) {
+            step(`window ${i} @${received}`);
+            const msg = await c.fetchOne(String(uid), { uid: true, bodyParts: [{ key: part, start: received, maxLength: chunk }] }, { uid: true });
+            const buf = msg ? msg.bodyParts?.get(part) : undefined;
+            const len = buf ? buf.length : 0;
+            lengths.push(len);
+            received += len;
+            if (len < chunk) break;
+          }
+          return { uid, part, chunk, compression: !noCompress, windows: lengths.length, lengths, total_raw: received };
+        },
+        false,
+        noCompress,
+      );
+      return Response.json({ ...res, ms: Date.now() - t0, log: rlog.slice(0, 10) });
+    }
+
     if (url.pathname === "/rawpipe") {
       return rawPipeProbe(env, {
         patch: url.searchParams.get("patch") === "1",

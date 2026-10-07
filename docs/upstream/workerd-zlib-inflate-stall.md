@@ -24,4 +24,4 @@ What follows from this:
 
 - Nothing to file with cloudflare/workerd for zlib.
 - Optionally, a confirmation comment on postalsys/imapflow#408 (`imapflow-workers-note.md`).
-- Project fix: upgrade imapflow to 2.1.0 or later and re-test with compression enabled. `disableCompression: true` stays as the workaround until then.
+- Project fix, done 2026-10-07: upgraded imapflow to 2.2.8 and removed `disableCompression`. The spike's large-response probe and the full e2e pass with compression on.
