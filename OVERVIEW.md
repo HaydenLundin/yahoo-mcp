@@ -74,7 +74,7 @@ The Worker lives at `https://yahoo-mcp.clthrl.workers.dev`; the MCP endpoint is 
 | Claude Code | verified 2026-10-07: read, organize, draft, and send tools work against the live mailbox |
 | claude.ai web, iOS, Android, Claude Desktop | verified 2026-10-07 |
 | ChatGPT web and mobile | verified 2026-10-07 (Developer mode, paid plan); `search` and `fetch` aliases included |
-| Codex CLI | server side ready (loopback redirect URIs accepted); not yet tried |
+| Codex CLI | verified 2026-10-07 |
 | Antigravity CLI | not planned at this time |
 
 Replace `<host>` with `yahoo-mcp.clthrl.workers.dev` in the snippets below.

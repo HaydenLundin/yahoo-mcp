@@ -141,7 +141,7 @@ describe("search_messages", () => {
   });
 });
 
-describe("search windows (Workers cannot receive a single IMAP line over ~16 KB)", () => {
+describe("search windows (1000-message sequence windows keep each SEARCH response small)", () => {
   beforeEach(async () => {
     await h.close();
     FakeImapFlow.reset([...yahooFolders(), bigFolder(2500)]);

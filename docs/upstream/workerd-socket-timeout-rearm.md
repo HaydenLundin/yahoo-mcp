@@ -1,22 +1,16 @@
-# Draft issue for cloudflare/workerd
+# Draft comment for cloudflare/workerd#7310
 
-Status: not filed. Paste into https://github.com/cloudflare/workerd/issues/new when ready.
+Status: not posted. **This bug is already filed:** https://github.com/cloudflare/workerd/issues/7310, open since 2026-09-10, root cause identified by the reporter, no comments yet. Do not open a new issue; add the text below as a comment on that one. Posting is a public action in the operator's name.
 
 ---
 
-**Title:** `node:net` `socket.setTimeout()` adds a new `'timeout'` listener per data chunk and fires all of them at once
+Independent confirmation from a different setup: imapflow 2.0.0 talking to Yahoo Mail IMAP over `node:tls` from a Worker on `compatibility_date` 2026-09-01 with `nodejs_compat`, wrangler 4.130.0 / workerd 1.20260908.1 locally and the production edge, 2026-10-07.
 
-**Summary**
+- `socket.listenerCount('timeout')` grows by one per data chunk after a single `setTimeout(ms)`: 44 listeners after a 70 KB response that arrived in 34 chunks. `MaxListenersExceededWarning: Possible EventEmitter memory leak detected. 11 timeout listeners added` appears after about ten chunks.
+- When the socket then goes idle, every accumulated timer fires within the same millisecond, so the library's `'timeout'` handler runs 20+ times for one idle period.
+- In `wrangler dev` only, the warning path itself throws `Uncaught TypeError: Cannot read properties of undefined (reading 'emit') at node-internal:internal_process`; the edge logs the warning normally. That looks like `process.emitWarning` reaching for a `process` object that does not exist in that context and may deserve its own issue.
 
-After calling `socket.setTimeout(ms)` once on a `node:tls` (or `node:net`) socket, each incoming data chunk re-arms the idle timer by registering another `'timeout'` listener instead of refreshing a single timer. Symptoms:
-
-1. `MaxListenersExceededWarning: Possible EventEmitter memory leak detected. 11 timeout listeners added` after ~10 chunks, and `socket.listenerCount('timeout')` grows without bound (44 after a 70 KB response in 34 chunks).
-2. When the socket then goes idle, all accumulated timers fire in the same millisecond, so a library's `'timeout'` handler runs 20+ times for one idle period.
-3. In `wrangler dev` only, the warning path itself throws `Uncaught TypeError: Cannot read properties of undefined (reading 'emit') at node-internal:internal_process`, because `process.emitWarning` reaches for a `process` object that is not available in that context. The edge logs the warning correctly.
-
-Node 22 keeps exactly one listener and one timer, refreshed on activity.
-
-**Repro**
+Minimal repro with no library involved:
 
 ```js
 import { connect } from "node:tls";
@@ -32,7 +26,7 @@ export default {
       counts.push(sock.listenerCount("timeout"));
     });
     await new Promise((r) => sock.once("secureConnect", r));
-    sock.write("A1 CAPABILITY\r\n"); // any server that answers with a few chunks
+    sock.write("A1 CAPABILITY\r\n"); // any server that answers in a few chunks
     await new Promise((r) => setTimeout(r, 2000));
     sock.destroy();
     return Response.json({ chunks, timeoutListenersPerChunk: counts });
@@ -40,10 +34,6 @@ export default {
 };
 ```
 
-Expected: `timeoutListenersPerChunk` stays at 1.
-Actual: it increments with every chunk.
+Expected: `timeoutListenersPerChunk` stays at 1. Actual: it increments with every chunk.
 
-**Environment**
-
-- wrangler 4.130.0, workerd 1.20260908.1 (local) and production edge, 2026-10-07
-- `compatibility_flags: ["nodejs_compat"]`, `compatibility_date: "2026-09-01"`
+The fix proposed above, keeping the timer handle rather than the return value of `setTimeout` and refreshing one `'timeout'` listener instead of adding one per call, matches what we observe.

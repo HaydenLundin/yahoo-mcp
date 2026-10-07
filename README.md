@@ -4,7 +4,7 @@ A self-hosted [MCP](https://modelcontextprotocol.io) server that lets AI assista
 
 Yahoo has no first-party connector in any of these tools. This fills the gap with the same permission model as Anthropic's Gmail connector: search and read, drafts, folders and flags, attachment metadata only, and send gated behind an explicit confirmation. No permanent delete of mail. No attachment downloads.
 
-Runs as a single Cloudflare Worker on the free tier. Verified end to end against a live Yahoo mailbox from Claude Code, claude.ai, and ChatGPT.
+Runs as a single Cloudflare Worker on the free tier. Verified end to end against a live Yahoo mailbox from Claude Code, claude.ai, ChatGPT, and Codex CLI.
 
 - **What it does and how to connect each client:** [OVERVIEW.md](OVERVIEW.md)
 - **Design spec (auth, tool manifest, data, security, error codes):** [ARCHITECTURE.md](ARCHITECTURE.md)
@@ -53,4 +53,4 @@ Then set the secrets listed in `.dev.vars.example` with `wrangler secret put`, c
 
 Cloudflare Workers (`nodejs_compat`), Hono, `@cloudflare/workers-oauth-provider`, `@modelcontextprotocol/sdk` via `@hono/mcp`, `imapflow` for IMAP, a small SMTP client of our own over `node:tls`, Cloudflare KV for OAuth state, D1 for pending sends and the audit log, and Workers Rate Limiting for the public OAuth endpoints.
 
-Two runtime facts cost real time and are documented so nobody pays twice. IMAP compression must stay off: workerd's streaming zlib inflater stops once a single chunk inflates past its 16 KB buffer, which silently stalled every large response until the cause was found. And nodemailer cannot open an SMTP connection from Workers while raw TLS to the same port works, hence the home-grown client. Both are written up in [docs/upstream](docs/upstream) as issue drafts for the runtime's maintainers.
+Two runtime facts cost real time and are documented so nobody pays twice. A stall on every large IMAP response turned out to be an imapflow 2.0.x input race that only Workers' task ordering exposes (fixed upstream in imapflow 2.1.0); compression is disabled as the workaround until the dependency is upgraded, and the full diagnosis, including a wrong first attribution to workerd's zlib, is in [FORHAYDEN.md](FORHAYDEN.md). And nodemailer cannot open an SMTP connection from Workers while raw TLS to the same port works, hence the home-grown client. Upstream notes and comment drafts live in [docs/upstream](docs/upstream).

@@ -1,23 +1,9 @@
-# Draft note for postalsys/imapflow
+# Optional comment for postalsys/imapflow#408
 
-Status: not filed. Paste into https://github.com/postalsys/imapflow/issues/new when ready. This is a heads-up, not a bug in imapflow.
+Status: not posted, optional. The issue is closed and fixed in 2.1.0, so this is only a data point for the next person who searches for the symptom. Paste at https://github.com/postalsys/imapflow/issues/408 if you want it on record. An earlier version of this file asked for a `disableCompression` recommendation in the README; that request was based on a wrong diagnosis (the inflater is fine) and is withdrawn.
 
 ---
 
-**Title:** Cloudflare Workers: COMPRESS=DEFLATE stalls on large responses; suggest documenting `disableCompression`
+One more way to hit this, for anyone searching: imapflow 2.0.0 against Yahoo Mail (which advertises `COMPRESS=DEFLATE`) from a Cloudflare Worker. Every highly compressible response over about 16 KB stalled to `socketTimeout`, such as a `* SEARCH` line with 10,000 uids or a quoted-printable text body, while envelope fetches of similar size went through.
 
-**Summary**
-
-imapflow 2.0.0 works on Cloudflare Workers (`nodejs_compat`) as the README says, with one catch. When the server advertises `COMPRESS=DEFLATE` (Yahoo Mail does), imapflow negotiates it and pipes the socket through `zlib.createInflateRaw({ chunkSize: 16 * 1024 })`. workerd's streaming inflater stops producing output once a single input chunk inflates past `chunkSize` (reported separately to cloudflare/workerd), so any highly compressible response over about 16 KB never completes: `search()` returns `false` after `socketTimeout`, a body `download()` hangs, and the connection is dead afterwards.
-
-Setting `disableCompression: true` avoids it entirely; a 70 KB `* SEARCH` line then arrives in under a second on the edge.
-
-**Suggestion**
-
-Add a line to the Workers paragraph of the README recommending `disableCompression: true` on Cloudflare Workers until workerd fixes the inflater, or skip the COMPRESS negotiation automatically when `navigator.userAgent === "Cloudflare-Workers"`.
-
-**Details**
-
-- imapflow 2.0.0, wrangler 4.130.0, workerd 1.20260908.1 and production edge, 2026-10-07
-- Server: Yahoo Mail IMAP (`imap.mail.yahoo.com:993`), capability `COMPRESS=DEFLATE`
-- Raw `node:tls` sockets on Workers deliver the same 70 KB line fine, including piped into a Transform with backpressure, so the socket layer is not involved.
+Compression makes the race near-deterministic: `createInflateRaw({ chunkSize: 16 * 1024 })` hands `ImapStream` several 16 KiB chunks per socket read, so the second one lands in the gap between the loop finding its queue empty and the `.finally()` clearing `processingInput`. Plain TLS delivers one chunk per read and mostly does not trip it, which is why `disableCompression: true` looked like a fix. We first blamed workerd's `node:zlib`; a standalone inflate test inside `workerd test` with no imapflow showed the inflater delivers everything, so the README's statement that COMPRESS=DEFLATE works on Workers as on Node is accurate from 2.1.0 on. c73f3ea resolves it.

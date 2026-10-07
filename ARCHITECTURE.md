@@ -7,7 +7,7 @@ Remote MCP server exposing a single Yahoo Mail account to multiple AI clients wi
 
 The design is client-agnostic by construction: it targets the strictest client (claude.ai) and everything else is a subset.
 
-Status: **all seven milestones built.** Verified live from Claude Code, claude.ai (web and mobile), and ChatGPT. Appendix §13 lists the stable error codes. See §10 for the spike outcome and §6 for the Workers 16 KB response rule.
+Status: **all seven milestones built.** Verified live from Claude Code, claude.ai (web and mobile), ChatGPT, and Codex CLI. Appendix §12 lists the stable error codes. See §10 for the spike outcome and §6 for the IMAP compression note.
 
 ---
 
@@ -225,7 +225,7 @@ Phase-1 send tools are deliberately *not* destructive — they only write a D1 r
 `lib/imap.ts`
 - One `ImapFlow` per tool call: `connect → getMailboxLock → op → lock.release → logout`. No pooling (Workers isolates are ephemeral; Yahoo tolerates short sessions).
 - Always UID-based (`uid: true` on fetch/search/move). Sequence numbers appear only as search *criteria* in `pagedSearch` windows, never to address a message.
-- **COMPRESS=DEFLATE is disabled** (`disableCompression: true`). Yahoo advertises it and imapflow would negotiate it, but workerd's streaming `node:zlib` inflater stops delivering once one input chunk inflates past its 16 KB buffer, which made every large single-line response or body literal stall (found 2026-10-06, root-caused 2026-10-07). `pagedSearch` (1000-message sequence windows, newest first) and ranged 60 KB body fetches predate the fix and stay as defence in depth; `search_messages.total` is exact when the folder was fully scanned or the search was unfiltered, else `null` with `has_more: true`.
+- **COMPRESS=DEFLATE is disabled** (`disableCompression: true`) as a workaround for an imapflow 2.0.x bug, not a Workers limitation. Yahoo advertises compression and imapflow negotiates it; imapflow 2.0.0's `ImapStream` cleared its input-loop guard a few microtasks after finding its queue empty, and on workerd a chunk delivered in that gap was never processed (postalsys/imapflow#408, fixed in 2.1.0). Compression made it near-deterministic because the inflater hands over several 16 KiB chunks per socket read, so every highly compressible response over 16 KB (uid lists, text bodies) stalled to `socketTimeout`. Found 2026-10-06, misattributed to workerd's `node:zlib` on 2026-10-07, corrected the same day with a standalone inflate test under `spike/zlib-lab/`. Once imapflow is upgraded past 2.1.0 the option can be reconsidered. `pagedSearch` (1000-message sequence windows, newest first) and ranged 60 KB body fetches stay as defence in depth; `search_messages.total` is exact when the folder was fully scanned or the search was unfiltered, else `null` with `has_more: true`.
 - Yahoo specifics: host `imap.mail.yahoo.com:993` `secure:true`; special-use folders are `Archive`, `Bulk Mail`, `Draft`, `Sent`, `Trash` — resolve via `list()` special-use flags, don't hardcode names. Yahoo does support `MOVE`.
 - Timeouts: 15s connect, 30s per op. Surface IMAP errors as MCP tool errors with a stable `code`.
 - Body handling: prefer `text/plain`; if only HTML, run through a sanitizer and produce text. Cap body at 50 KB in responses; note truncation.

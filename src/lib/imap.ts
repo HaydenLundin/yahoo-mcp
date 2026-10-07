@@ -6,14 +6,16 @@ import { decodeBody, type BodyPart } from "./mime";
 const YAHOO_IMAP = { host: "imap.mail.yahoo.com", port: 993 } as const;
 
 /**
- * The "16 KB stall", found 2026-10-06 and solved 2026-10-07. Symptom: a single IMAP response
- * line or literal over ~16 KB never finished arriving on Workers (local and edge); the command
- * stalled to socketTimeout and the connection died. Cause: imapflow negotiates COMPRESS=DEFLATE
- * with Yahoo and pipes the socket through node:zlib's streaming inflater with a 16 KB chunkSize;
- * workerd's inflater stops producing output once one input chunk inflates past that buffer.
- * Highly compressible data (uid lists, text bodies) hit it, less compressible data (envelopes) did
- * not, which is why it looked like a size threshold. Fix: disableCompression below. Raw node:tls
- * sockets were verified fine throughout (spike/index.ts: /raw, /rawpipe).
+ * The "16 KB stall", found 2026-10-06. Symptom: a single IMAP response line or literal over
+ * ~16 KB never finished arriving on Workers (local and edge); the command stalled to socketTimeout
+ * and the connection died. Cause (established 2026-10-07 after a wrong first attribution to
+ * workerd's node:zlib): imapflow 2.0.0's ImapStream clears its input-loop guard a few microtasks
+ * after finding its queue empty, and on workerd the next chunk is delivered inside that gap and is
+ * never processed (postalsys/imapflow#408, fixed in 2.1.0). COMPRESS=DEFLATE makes the race
+ * near-certain because the inflater hands over several 16 KiB chunks per socket read; plain TLS
+ * delivers one chunk per read, so disabling compression below sidesteps it. A standalone inflate
+ * test (spike/zlib-lab) shows workerd's zlib itself is fine. Once imapflow is upgraded past 2.1.0
+ * the option can go.
  *
  * pagedSearch and the ranged body fetches predate the fix and stay as defence in depth: they bound
  * response sizes and round trips, and the ranged fetch also sidesteps imapflow's download(), which
@@ -50,9 +52,10 @@ export async function withImap<T>(
     connectionTimeout: 15_000,
     greetingTimeout: 15_000,
     socketTimeout: 30_000,
-    // THE fix for the 16 KB stall (see the note above). imapflow enables COMPRESS=DEFLATE after
-    // login because Yahoo advertises it, and workerd's streaming node:zlib inflater stops delivering
-    // once a single input chunk inflates past its 16 KB output buffer. Plain TLS has no such limit.
+    // Workaround for the 16 KB stall (see the note above): imapflow 2.0.x drops a chunk that
+    // arrives while its input loop is winding down, and the inflater behind COMPRESS=DEFLATE
+    // produces exactly that timing. Plain TLS delivers one chunk per read and does not. Revisit
+    // after upgrading imapflow past 2.1.0.
     disableCompression: true,
   });
   // A failed command can leave the socket to time out later; without a listener that
