@@ -7,7 +7,7 @@ Remote MCP server exposing a single Yahoo Mail account to multiple AI clients wi
 
 The design is client-agnostic by construction: it targets the strictest client (claude.ai) and everything else is a subset.
 
-Status: **spike passed 2026-09-08; single-Worker design confirmed**. See §10 for the outcome.
+Status: **milestones 1–4 built (read, organize, draft); send tools next**. See §10 for the spike outcome and §6 for the Workers 16 KB response rule.
 
 ---
 
@@ -162,8 +162,8 @@ Reference: Anthropic's Gmail connector = search/read, drafts, labels/threads, at
 
 | Tool | Params | Behavior |
 |---|---|---|
-| `create_draft` | `to[], cc?[], bcc?[], subject, body_text, body_html?, in_reply_to_uid?` | IMAP `APPEND` to Drafts with `\Draft`; sets In-Reply-To/References when replying |
-| `update_draft` | `uid, ...same` | append new + delete old (IMAP has no in-place edit) |
+| `create_draft` | `to[], cc?[], bcc?[], subject, body_text, body_html?, in_reply_to_uid?, in_reply_to_folder="INBOX"` | IMAP `APPEND` to Drafts (found by `\Drafts` special-use) with `\Draft \Seen`; quoted-printable UTF-8, `multipart/alternative` when `body_html` is given; sets In-Reply-To/References from the original when replying. Bcc is kept on the draft so the user sees it |
+| `update_draft` | `uid, ...same` | full replacement: append new, then `UID EXPUNGE` the old one (IMAP has no in-place edit). The old draft is only removed after the new one is saved |
 | `delete_draft` | `uid` | hard delete from Drafts — the only expunge in the system |
 
 ### 5.3 Organize (`mail.organize`)

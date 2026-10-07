@@ -15,6 +15,9 @@ const YAHOO_IMAP = { host: "imap.mail.yahoo.com", port: 993 } as const;
  *  - body parts are fetched in explicit byte ranges of IMAP_CHUNK_BYTES (downloadText), so no
  *    literal exceeds the limit. imapflow's own download() is not used: for single-part messages it
  *    also fetches the whole message header block, and Yahoo's headers alone can exceed 16 KB.
+ * Where the fault lives (2026-10-07): raw node:tls sockets on Workers deliver a 70 KB line fine,
+ * including through pipe() into a Transform with real backpressure, idle timeouts, and keepalive.
+ * The stall is inside imapflow's handling of a long response line and is being reported upstream.
  */
 export const IMAP_CHUNK_BYTES = 12_000;
 export const SEARCH_WINDOW = 1000;

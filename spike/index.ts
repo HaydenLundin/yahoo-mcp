@@ -15,6 +15,10 @@ interface LogEntry {
   err?: string;
   code?: string;
   response?: string;
+  src?: string;
+  cmd?: string;
+  size?: number;
+  t?: number;
 }
 interface StructureNode {
   type: string;
@@ -22,11 +26,25 @@ interface StructureNode {
   childNodes?: StructureNode[];
 }
 
-function makeClient(env: Env, log: LogEntry[]): ImapFlow {
+function makeClient(env: Env, log: LogEntry[], trace = false, noCompress = false): ImapFlow {
   const capture = (level: string) => (entry: unknown) => {
-    const e = (entry ?? {}) as { msg?: string; err?: { message?: string; code?: string; responseText?: string } };
-    log.push({ level, msg: e.msg, err: e.err?.message, code: e.err?.code, response: e.err?.responseText });
+    const e = (entry ?? {}) as {
+      msg?: string;
+      src?: string;
+      cmd?: string;
+      command?: string;
+      err?: { message?: string; code?: string; responseText?: string };
+      data?: unknown;
+    };
+    const size = typeof e.data === "string" ? e.data.length : undefined;
+    if (e.msg === "Socket timeout" || e.err?.message === "Socket timeout") return; // bursty shim noise
+    if (log.length < 80) {
+      log.push({ level, msg: e.msg, err: e.err?.message, code: e.err?.code, response: e.err?.responseText, src: e.src, cmd: e.cmd ?? e.command, size, t: Date.now() });
+    }
   };
+  const quiet = trace ? capture("trace") : () => {};
+  const quietDebug = trace ? capture("debug") : () => {};
+  const quietInfo = trace ? capture("info") : () => {};
   return new ImapFlow({
     host: "imap.mail.yahoo.com",
     port: 993,
@@ -36,9 +54,9 @@ function makeClient(env: Env, log: LogEntry[]): ImapFlow {
       pass: env.YAHOO_APP_PASSWORD ?? "not-a-real-password",
     },
     logger: {
-      trace() {},
-      debug() {},
-      info() {},
+      trace: quiet,
+      debug: quietDebug,
+      info: quietInfo,
       warn: capture("warn"),
       error: capture("error"),
       fatal: capture("fatal"),
@@ -46,6 +64,7 @@ function makeClient(env: Env, log: LogEntry[]): ImapFlow {
     connectionTimeout: 15_000,
     greetingTimeout: 15_000,
     socketTimeout: 20_000,
+    disableCompression: noCompress,
   });
 }
 
@@ -54,9 +73,13 @@ async function session<T>(
   env: Env,
   log: LogEntry[],
   fn: (c: ImapFlow, step: (name: string) => void) => Promise<T>,
+  trace = false,
+  noCompress = false,
 ): Promise<T | { failed: string; at: string; after_ms: number }> {
-  const c = makeClient(env, log);
-  c.on("error", (e: unknown) => log.push({ level: "event", err: (e as Error).message }));
+  const c = makeClient(env, log, trace, noCompress);
+  c.on("error", (e: unknown) => {
+    if ((e as Error).message !== "Socket timeout") log.push({ level: "event", err: (e as Error).message });
+  });
   let current = "connect";
   const started = Date.now();
   const step = (name: string) => {
@@ -111,10 +134,309 @@ async function readAll(d: { content?: AsyncIterable<Uint8Array> }): Promise<{ by
   return { bytes: n };
 }
 
+
+interface SocketLike {
+  pause: () => unknown;
+  resume: () => unknown;
+  readableHighWaterMark?: number;
+  readableFlowing?: boolean | null;
+  constructor?: { name?: string };
+}
+
+async function rawProbe(env: Env, mode: "flow" | "pause"): Promise<Response> {
+  const { connect } = await import("node:tls");
+  const t0 = Date.now();
+  const events: string[] = [];
+  let bytes = 0;
+  let chunks = 0;
+  let buf = "";
+  let tagNo = 0;
+  const pending: Array<{ tag: string; resolve: (line: string) => void }> = [];
+  const quote = (v: string) => JSON.stringify(v); // IMAP quoted-string escaping matches JSON's
+
+  return new Promise<Response>((resolve) => {
+    let finished = false;
+    const sock = connect({ host: "imap.mail.yahoo.com", port: 993, servername: "imap.mail.yahoo.com" });
+    const finish = (why: string) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      try {
+        sock.destroy();
+      } catch {
+        /* ignore */
+      }
+      resolve(Response.json({ mode, why, bytes, chunks, ms: Date.now() - t0, events: events.slice(0, 40) }));
+    };
+    const timer = setTimeout(() => finish("timeout"), 25_000);
+    const exec = (cmd: string, label: string) =>
+      new Promise<string>((res) => {
+        const tag = `A${++tagNo}`;
+        pending.push({ tag, resolve: res });
+        events.push(`> ${tag} ${label}`);
+        sock.write(`${tag} ${cmd}\r\n`);
+      });
+
+    sock.on("data", (chunk: Uint8Array) => {
+      bytes += chunk.byteLength;
+      chunks++;
+      if (chunks <= 5 || chunks % 10 === 0) events.push(`chunk#${chunks} ${chunk.byteLength}B total=${bytes}`);
+      if (mode === "pause" && chunks === 1) {
+        sock.pause();
+        events.push("paused");
+        setTimeout(() => {
+          sock.resume();
+          events.push("resumed");
+        }, 100);
+      }
+      buf += new TextDecoder("latin1").decode(chunk);
+      let idx: number;
+      while ((idx = buf.indexOf("\r\n")) >= 0) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        if (line.startsWith("* SEARCH")) events.push(`search line ${line.length} chars`);
+        for (let i = pending.length - 1; i >= 0; i--) {
+          if (line.startsWith(`${pending[i].tag} `)) {
+            events.push(`< ${line.slice(0, 60)}`);
+            pending[i].resolve(line);
+            pending.splice(i, 1);
+          }
+        }
+      }
+    });
+    sock.on("error", (e: Error) => {
+      events.push(`error ${e.message}`);
+      finish("error");
+    });
+    sock.on("close", () => {
+      events.push("close");
+      finish("closed");
+    });
+    sock.once("secureConnect", async () => {
+      events.push("connected");
+      await exec(`LOGIN ${quote(env.YAHOO_USER ?? "")} ${quote(env.YAHOO_APP_PASSWORD ?? "")}`, "LOGIN");
+      await exec("SELECT INBOX", "SELECT INBOX");
+      await exec("UID SEARCH ALL", "UID SEARCH ALL");
+      await exec("LOGOUT", "LOGOUT");
+      finish("ok");
+    });
+  });
+}
+
+
+interface RawPipeOptions {
+  patch: boolean;
+  deferMs: number;
+  /** sock.setTimeout(ms) once after connect, as imapflow's configureSocket does. */
+  timeoutMs: number;
+  /** Re-arm sock.setTimeout on every data chunk. */
+  rearm: boolean;
+  /** sock.setKeepAlive(true, 5000) as imapflow does. */
+  keepAlive: boolean;
+}
+
+async function rawPipeProbe(env: Env, opts: RawPipeOptions): Promise<Response> {
+  const { patch, deferMs, timeoutMs, rearm, keepAlive } = opts;
+  const { connect } = await import("node:tls");
+  const { Transform } = await import("node:stream");
+  const t0 = Date.now();
+  const events: string[] = [];
+  let socketBytes = 0;
+  let socketChunks = 0;
+  let parsedBytes = 0;
+  let lines = 0;
+  let pauses = 0;
+  let writeFalse = 0;
+  let tagNo = 0;
+  let buf = "";
+  const pending: Array<{ tag: string; resolve: (line: string) => void }> = [];
+
+  return new Promise<Response>((resolve) => {
+    let finished = false;
+    const sock = connect({ host: "imap.mail.yahoo.com", port: 993, servername: "imap.mail.yahoo.com" });
+    const finish = (why: string) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      try {
+        sock.destroy();
+      } catch {
+        /* ignore */
+      }
+      resolve(
+        Response.json({
+          patch,
+          deferMs,
+          timeoutMs,
+          rearm,
+          keepAlive,
+          timeoutListeners,
+          why,
+          socketBytes,
+          socketChunks,
+          parsedBytes,
+          lines,
+          pauses,
+          writeFalse,
+          ms: Date.now() - t0,
+          events: events.slice(0, 40),
+        }),
+      );
+    };
+    const timer = setTimeout(() => finish("timeout"), 25_000);
+    let timeoutListeners = 0;
+    sock.on("timeout", () => events.push("socket timeout event"));
+    if (keepAlive && typeof (sock as { setKeepAlive?: unknown }).setKeepAlive === "function") {
+      (sock as unknown as { setKeepAlive: (on: boolean, ms: number) => void }).setKeepAlive(true, 5000);
+      events.push("keepalive set");
+    }
+    if (timeoutMs > 0) {
+      sock.setTimeout(timeoutMs);
+      events.push(`setTimeout(${timeoutMs})`);
+    }
+    if (patch) {
+      const origPause = sock.pause.bind(sock);
+      sock.pause = () => {
+        pauses++;
+        return sock;
+      };
+      void origPause;
+    } else {
+      const origPause = sock.pause.bind(sock);
+      sock.pause = () => {
+        pauses++;
+        return origPause();
+      };
+    }
+
+    // Parser stand-in: splits lines, defers the write callback like ImapStream does.
+    const parser = new Transform({
+      readableObjectMode: true,
+      transform(chunk: Uint8Array, _enc, next) {
+        parsedBytes += chunk.byteLength;
+        buf += new TextDecoder("latin1").decode(chunk);
+        let idx: number;
+        while ((idx = buf.indexOf("\r\n")) >= 0) {
+          const line = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          lines++;
+          this.push({ line });
+        }
+        if (deferMs > 0) setTimeout(next, deferMs);
+        else Promise.resolve().then(() => next());
+      },
+    });
+    parser.on("data", (item: { line: string }) => {
+      const line = item.line;
+      if (line.startsWith("* SEARCH")) events.push(`search line ${line.length} chars`);
+      for (let i = pending.length - 1; i >= 0; i--) {
+        if (line.startsWith(`${pending[i].tag} `)) {
+          events.push(`< ${line.slice(0, 50)}`);
+          pending[i].resolve(line);
+          pending.splice(i, 1);
+        }
+      }
+    });
+    sock.on("data", (chunk: Uint8Array) => {
+      socketBytes += chunk.byteLength;
+      socketChunks++;
+      if (socketChunks <= 3 || socketChunks % 10 === 0) events.push(`chunk#${socketChunks} total=${socketBytes}`);
+      if (rearm && timeoutMs > 0) sock.setTimeout(timeoutMs);
+      timeoutListeners = sock.listenerCount("timeout");
+    });
+    const origWrite = parser.write.bind(parser);
+    parser.write = ((chunk: unknown, ...rest: unknown[]) => {
+      const ok = (origWrite as (...a: unknown[]) => boolean)(chunk, ...rest);
+      if (!ok) writeFalse++;
+      return ok;
+    }) as typeof parser.write;
+    sock.pipe(parser);
+
+    const exec = (cmd: string, label: string) =>
+      new Promise<string>((res) => {
+        const tag = `A${++tagNo}`;
+        pending.push({ tag, resolve: res });
+        events.push(`> ${tag} ${label}`);
+        sock.write(`${tag} ${cmd}\r\n`);
+      });
+    sock.on("error", (e: Error) => {
+      events.push(`error ${e.message}`);
+      finish("error");
+    });
+    sock.once("secureConnect", async () => {
+      events.push("connected");
+      await exec(`LOGIN ${JSON.stringify(env.YAHOO_USER ?? "")} ${JSON.stringify(env.YAHOO_APP_PASSWORD ?? "")}`, "LOGIN");
+      await exec("SELECT INBOX", "SELECT INBOX");
+      await exec("UID SEARCH ALL", "UID SEARCH ALL");
+      await exec("LOGOUT", "LOGOUT");
+      finish("ok");
+    });
+  });
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname === "/ping") return Response.json({ ok: true, runtime: navigator.userAgent ?? null });
+    // Experiment 1: same stalled search, but with the pipe's pause() disabled on imapflow's socket
+    // (?patch=1). If it completes, Node-style backpressure is what stops the Workers socket shim.
+    // Experiment 3: does setImmediate ever fire under workerd? imapflow awaits it every 10 chunks.
+    if (url.pathname === "/immediate") {
+      const t = Date.now();
+      const kind = typeof (globalThis as { setImmediate?: unknown }).setImmediate;
+      const result = await Promise.race([
+        new Promise<string>((res) => (globalThis as unknown as { setImmediate: (fn: () => void) => void }).setImmediate(() => res("fired"))),
+        new Promise<string>((res) => setTimeout(() => res("timeout"), 3000)),
+      ]);
+      return Response.json({ setImmediate: kind, result, ms: Date.now() - t });
+    }
+
+    if (url.pathname === "/pausefix") {
+      const log: LogEntry[] = [];
+      const out: Record<string, unknown> = { patch: url.searchParams.get("patch") === "1", poly: url.searchParams.get("poly") === "1" };
+      if (out.poly) {
+        (globalThis as unknown as { setImmediate: unknown }).setImmediate = (fn: (...a: unknown[]) => void, ...a: unknown[]) =>
+          setTimeout(fn, 0, ...a);
+      }
+      out.result = await session(env, log, async (c, step) => {
+        const sock = (c as unknown as { socket?: SocketLike }).socket;
+        out.socket = sock
+          ? { hwm: sock.readableHighWaterMark, flowing: sock.readableFlowing, ctor: sock.constructor?.name }
+          : null;
+        if (out.patch && sock) {
+          sock.pause = () => sock;
+          out.patched = true;
+        }
+        const mb = c.mailbox && typeof c.mailbox === "object" ? c.mailbox : null;
+        const next = mb?.uidNext ?? 0;
+        const width = Number(url.searchParams.get("width") ?? 20_000);
+        step(`search_window_${width}`);
+        const { r, ms } = await timed(() => c.search({ uid: `${Math.max(1, next - width)}:*` }, { uid: true }));
+        return { count: Array.isArray(r) ? r.length : r, ms };
+      }, url.searchParams.get("trace") === "1", url.searchParams.get("nocompress") === "1");
+      out.nocompress = url.searchParams.get("nocompress") === "1";
+      out.log = log.slice(0, 60);
+      return Response.json(out);
+    }
+
+    // Experiment 2: no library at all. Raw node:tls socket, LOGIN, SELECT, UID SEARCH ALL (~70 KB line).
+    // ?mode=flow reads in flowing mode; ?mode=pause pauses after the first chunk and resumes 100 ms later.
+    // Experiment 4: raw socket piped into a Transform that defers its callback like imapflow's
+    // parser does (?patch=1 disables pause on the socket). Separates stream machinery from imapflow.
+    if (url.pathname === "/rawpipe") {
+      return rawPipeProbe(env, {
+        patch: url.searchParams.get("patch") === "1",
+        deferMs: Number(url.searchParams.get("defer") ?? 0),
+        timeoutMs: Number(url.searchParams.get("timeout") ?? 0),
+        rearm: url.searchParams.get("rearm") === "1",
+        keepAlive: url.searchParams.get("keepalive") === "1",
+      });
+    }
+
+    if (url.pathname === "/raw") {
+      return rawProbe(env, url.searchParams.get("mode") === "pause" ? "pause" : "flow");
+    }
+
     if (url.pathname !== "/run") return new Response("spike: GET /run (three Yahoo logins)", { status: 200 });
 
     const log: LogEntry[] = [];

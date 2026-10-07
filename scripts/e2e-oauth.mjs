@@ -210,6 +210,39 @@ if (search.data.messages.length) {
 const drafts = await tool("list_drafts", { limit: 5 });
 log(`list_drafts ok in ${drafts.ms} ms: ${drafts.data.messages.length} of ${drafts.data.total} in ${drafts.data.folder}`);
 
+// 5c. Write tools, self-cleaning: a draft is created, updated, listed, and deleted; the newest
+// message gets flagged and unflagged and its read state toggled and restored. Nothing is moved.
+const stamp = `yahoo-mcp e2e ${new Date().toISOString()}`;
+const created = await tool("create_draft", { to: ["e2e@example.com"], subject: stamp, body_text: "Draft written by the e2e test. Safe to delete." });
+if (typeof created.data.uid !== "number") fail("create_draft shape");
+log(`create_draft ok in ${created.ms} ms: uid ${created.data.uid} in ${created.data.folder}`);
+
+const updated = await tool("update_draft", { uid: created.data.uid, to: ["e2e@example.com"], subject: `${stamp} (v2)`, body_text: "Updated by the e2e test.", body_html: "<p>Updated by the e2e test.</p>" });
+if (updated.data.replaced_uid !== created.data.uid || typeof updated.data.uid !== "number") fail("update_draft shape");
+log(`update_draft ok in ${updated.ms} ms: ${created.data.uid} -> ${updated.data.uid}`);
+
+const listed = await tool("list_drafts", { limit: 5 });
+if (!listed.data.messages.some((m) => m.uid === updated.data.uid)) fail("updated draft not in list_drafts");
+if (listed.data.messages.some((m) => m.uid === created.data.uid)) fail("old draft still listed after update");
+log(`list_drafts ok in ${listed.ms} ms: new draft present, old one gone`);
+
+const deleted = await tool("delete_draft", { uid: updated.data.uid });
+if (deleted.data.deleted !== true) fail("delete_draft shape");
+log(`delete_draft ok in ${deleted.ms} ms`);
+
+if (search.data.messages.length) {
+  const target = search.data.messages[0];
+  const flagged = await tool("flag_messages", { uids: [target.uid] });
+  const unflagged = await tool("unflag_messages", { uids: [target.uid] });
+  if (flagged.data.updated !== 1 || unflagged.data.updated !== 1) fail("flag tools shape");
+  log(`flag/unflag ok in ${flagged.ms}+${unflagged.ms} ms`);
+  const wasUnread = target.unread;
+  const first = await tool(wasUnread ? "mark_read" : "mark_unread", { uids: [target.uid] });
+  const restore = await tool(wasUnread ? "mark_unread" : "mark_read", { uids: [target.uid] });
+  if (first.data.updated !== 1 || restore.data.updated !== 1) fail("mark tools shape");
+  log(`mark read/unread toggled and restored in ${first.ms}+${restore.ms} ms`);
+}
+
 // 6. Refresh token rotation.
 const refresh = await fetch(as.token_endpoint, {
   method: "POST",

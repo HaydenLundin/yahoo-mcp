@@ -21,6 +21,30 @@ export const READ_ONLY: ToolAnnotations = {
   openWorldHint: false,
 };
 
+/** Organize tools: move, archive, trash, flags. Repeating them changes nothing further. */
+export const WRITE_IDEMPOTENT: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+
+/** create_draft and update_draft: each call produces a new draft. */
+export const WRITE: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+};
+
+/** delete_draft: the one expunge in the system. */
+export const DESTRUCTIVE_IDEMPOTENT: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+
 export interface RunToolMeta {
   name: string;
   /** Read tools are audited at tool level only; write tools also record an args digest. */

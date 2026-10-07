@@ -10,7 +10,7 @@ Yahoo has no first-party connector in any of these tools. This fills the gap wit
 
 ## Status
 
-Milestone 3 of 7: a single Cloudflare Worker serving OAuth 2.1 (dynamic client registration, PKCE, refresh rotation), a Cloudflare Access guarded consent page, and a stateless MCP endpoint with the read tools: `list_folders`, `search_messages`, `get_message`, `get_thread`, `list_drafts`. Connected and working from Claude Code against the live mailbox. Organize, draft, and two-phase send tools follow in milestones 4 and 5.
+Milestone 4 of 7: a single Cloudflare Worker serving OAuth 2.1 (dynamic client registration, PKCE, refresh rotation), a Cloudflare Access guarded consent page, and a stateless MCP endpoint with read tools (`list_folders`, `search_messages`, `get_message`, `get_thread`, `list_drafts`), organize tools (`move_messages`, `archive_messages`, `trash_messages`, `mark_read`, `mark_unread`, `flag_messages`, `unflag_messages`), and draft tools (`create_draft`, `update_draft`, `delete_draft`). Connected and working from Claude Code against the live mailbox. Two-phase send follows in milestone 5.
 
 ## Run it
 

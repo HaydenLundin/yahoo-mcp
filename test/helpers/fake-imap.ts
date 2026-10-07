@@ -9,9 +9,9 @@ import type {
 
 /**
  * In-memory stand-in for imapflow's ImapFlow. Supports exactly the subset the tools use:
- * on, list, getMailboxLock, mailbox, search (including seq windows), fetchAll, fetchOne
- * (including ranged bodyParts), logout, close. Fixtures are static so `vi.mock("imapflow")`
- * can swap the class in.
+ * on, socket, list, getMailboxLock, mailbox, search (including seq windows), fetchAll,
+ * fetchOne (including ranged bodyParts), append, messageMove, messageFlagsAdd/Remove,
+ * messageDelete, logout, close. Fixtures are static so `vi.mock("imapflow")` can swap the class in.
  */
 export interface FakeMessage {
   uid: number;
@@ -28,6 +28,8 @@ export interface FakeMessage {
    */
   parts?: Record<string, string | Uint8Array>;
   internalDate?: Date;
+  /** Full raw message as APPENDed, kept so tests can inspect what was saved. */
+  raw?: string;
 }
 
 export interface FakeFolder {
@@ -49,22 +51,40 @@ export class FakeImapFlow {
   static calls: string[] = [];
   static failConnect: unknown = null;
   static rejectThreadIdSearch = false;
+  /** The socket object of the most recently constructed client, to assert the backpressure patch. */
+  static lastSocket: { pauses: number; pause: () => unknown } | null = null;
 
   static reset(folders: FakeFolder[]): void {
     FakeImapFlow.folders = folders;
     FakeImapFlow.calls = [];
     FakeImapFlow.failConnect = null;
     FakeImapFlow.rejectThreadIdSearch = false;
+    FakeImapFlow.lastSocket = null;
+  }
+
+  static folder(path: string): FakeFolder {
+    const f = FakeImapFlow.folders.find((x) => x.path === path);
+    if (!f) throw new Error(`fake folder ${path} missing`);
+    return f;
   }
 
   readonly options: unknown;
   readonly listeners: Record<string, Array<(...args: unknown[]) => void>> = {};
+  /** Mirrors the real TLSSocket imapflow exposes; counts pause() calls that get through. */
+  readonly socket = {
+    pauses: 0,
+    pause(): unknown {
+      this.pauses++;
+      return this;
+    },
+  };
   /** Mirrors imapflow: the selected mailbox object, or false before SELECT. */
   mailbox: { path: string; exists: number; uidNext: number } | false = false;
   private selected: FakeFolder | null = null;
 
   constructor(options: unknown) {
     this.options = options;
+    FakeImapFlow.lastSocket = this.socket;
   }
 
   on(event: string, handler: (...args: unknown[]) => void): this {
@@ -113,11 +133,10 @@ export class FakeImapFlow {
       });
     }
     this.selected = folder;
-    const uids = folder.messages.map((m) => m.uid);
     this.mailbox = {
       path,
       exists: folder.messages.length,
-      uidNext: (uids.length ? Math.max(...uids) : 0) + 1,
+      uidNext: nextUid(folder),
     };
     return { path, release: () => FakeImapFlow.calls.push(`release:${path}`) };
   }
@@ -167,6 +186,126 @@ export class FakeImapFlow {
     return m ? this.project(m, query) : false;
   }
 
+  async append(
+    path: string,
+    content: string | Uint8Array,
+    flags?: string[],
+  ): Promise<{ destination: string; uid: number } | false> {
+    const folder = FakeImapFlow.folders.find((f) => f.path === path);
+    if (!folder) return false;
+    const raw =
+      typeof content === "string"
+        ? content
+        : Buffer.from(content).toString("utf8");
+    const [head, ...bodyParts] = raw.split("\r\n\r\n");
+    const headers = parseHeaders(head);
+    const uid = nextUid(folder);
+    FakeImapFlow.calls.push(`append:${path}:${uid}:${(flags ?? []).join(",")}`);
+    folder.messages.push({
+      uid,
+      flags: flags ?? [],
+      size: raw.length,
+      envelope: {
+        date: new Date(headers.date ?? Date.now()),
+        subject: headers.subject,
+        messageId: headers["message-id"],
+        inReplyTo: headers["in-reply-to"],
+        to: (headers.to ?? "")
+          .split(",")
+          .map((a) => ({ address: a.trim().replace(/^.*<|>$/g, "") })),
+      },
+      structure: {
+        type: headers["content-type"]?.split(";")[0] ?? "text/plain",
+        encoding: "7bit",
+        size: raw.length,
+      },
+      headers: head,
+      parts: { "1": bodyParts.join("\r\n\r\n") },
+      raw,
+    });
+    return { destination: path, uid };
+  }
+
+  async messageMove(
+    range: number[] | string,
+    destination: string,
+  ): Promise<
+    { path: string; destination: string; uidMap: Map<number, number> } | false
+  > {
+    const from = this.selected;
+    const to = FakeImapFlow.folders.find((f) => f.path === destination);
+    if (!from) return false;
+    if (!to) {
+      throw Object.assign(new Error("Command failed"), {
+        serverResponseCode: "TRYCREATE",
+        responseText: `[TRYCREATE] Mailbox doesn't exist: ${destination}`,
+      });
+    }
+    const wanted = new Set(
+      Array.isArray(range) ? range : String(range).split(",").map(Number),
+    );
+    FakeImapFlow.calls.push(
+      `move:${from.path}->${destination}:${[...wanted].join(",")}`,
+    );
+    const uidMap = new Map<number, number>();
+    for (const m of from.messages.filter((x) => wanted.has(x.uid))) {
+      from.messages.splice(from.messages.indexOf(m), 1);
+      const uid = nextUid(to);
+      to.messages.push({ ...m, uid });
+      uidMap.set(m.uid, uid);
+    }
+    return { path: from.path, destination, uidMap };
+  }
+
+  async messageFlagsAdd(
+    range: number[] | string,
+    flags: string[],
+  ): Promise<boolean> {
+    return this.storeFlags(range, flags, true);
+  }
+
+  async messageFlagsRemove(
+    range: number[] | string,
+    flags: string[],
+  ): Promise<boolean> {
+    return this.storeFlags(range, flags, false);
+  }
+
+  private storeFlags(
+    range: number[] | string,
+    flags: string[],
+    add: boolean,
+  ): boolean {
+    if (!this.selected) return false;
+    const wanted = new Set(
+      Array.isArray(range) ? range : String(range).split(",").map(Number),
+    );
+    FakeImapFlow.calls.push(
+      `flags:${add ? "+" : "-"}${flags.join(",")}:${[...wanted].join(",")}`,
+    );
+    for (const m of this.selected.messages.filter((x) => wanted.has(x.uid))) {
+      const set = new Set(m.flags ?? []);
+      for (const f of flags) add ? set.add(f) : set.delete(f);
+      m.flags = [...set];
+    }
+    return true;
+  }
+
+  async messageDelete(range: number[] | string): Promise<boolean> {
+    if (!this.selected) return false;
+    const wanted = new Set(
+      Array.isArray(range) ? range : String(range).split(",").map(Number),
+    );
+    FakeImapFlow.calls.push(
+      `delete:${this.selected.path}:${[...wanted].join(",")}`,
+    );
+    const before = this.selected.messages.length;
+    this.selected.messages = this.selected.messages.filter(
+      (m) => !wanted.has(m.uid),
+    );
+    return this.selected.messages.length < before;
+  }
+
   private project(m: FakeMessage, query: FetchQueryObject): FetchMessageObject {
     const out: FetchMessageObject = { seq: m.uid, uid: m.uid };
     if (query.flags) out.flags = new Set(m.flags ?? []);
@@ -199,6 +338,23 @@ export class FakeImapFlow {
     }
     return out;
   }
+}
+
+function nextUid(folder: FakeFolder): number {
+  return (
+    (folder.messages.length
+      ? Math.max(...folder.messages.map((m) => m.uid))
+      : 0) + 1
+  );
+}
+
+function parseHeaders(head: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of head.replace(/\r\n[ \t]+/g, " ").split("\r\n")) {
+    const i = line.indexOf(":");
+    if (i > 0) out[line.slice(0, i).toLowerCase()] = line.slice(i + 1).trim();
+  }
+  return out;
 }
 
 /** IMAP sequence set subset: "lo:hi", "n", or "n:*". */

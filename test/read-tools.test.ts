@@ -25,24 +25,15 @@ const searchCalls = () =>
   FakeImapFlow.calls.filter((c) => c.startsWith("search:"));
 
 describe("tools/list", () => {
-  it("exposes exactly the read tools, all marked read-only, and no send tools", async () => {
+  it("exposes the read tools as read-only and no send tools", async () => {
     const { tools } = await h.client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(
-      [
-        "get_message",
-        "get_thread",
-        "list_drafts",
-        "list_folders",
-        "search_messages",
-      ].sort(),
-    );
-    for (const t of tools) {
-      expect(t.annotations).toMatchObject({
-        readOnlyHint: true,
-        destructiveHint: false,
-        openWorldHint: false,
-      });
+    const names = tools.map((t) => t.name);
+    const readTools = ["get_message", "get_thread", "list_drafts", "list_folders", "search_messages"];
+    for (const n of readTools) expect(names).toContain(n);
+    for (const t of tools.filter((t) => readTools.includes(t.name))) {
+      expect(t.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false, openWorldHint: false });
     }
+    expect(names.some((n) => n.includes("send"))).toBe(false);
   });
 });
 

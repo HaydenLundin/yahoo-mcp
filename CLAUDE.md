@@ -7,6 +7,7 @@ Remote MCP server (one Cloudflare Worker) exposing a single Yahoo Mail account t
 - Changing auth (OAuth provider, Cloudflare Access, consent page) -> read `ARCHITECTURE.md` section 4, then `src/auth/*` and `src/index.ts`.
 - Adding or changing a tool -> `ARCHITECTURE.md` section 5 (manifest + annotations), `src/mcp/tool.ts` (the `runTool` wrapper every tool uses), `docs/rules/coding-rules.md`.
 - IMAP or SMTP behaviour -> `ARCHITECTURE.md` section 6, `src/lib/imap.ts`; Yahoo and Workers quirks in `docs/rules/debugging-rules.md`.
+- Building outgoing mail (drafts now, sending in milestone 5) -> `src/lib/compose.ts` (RFC 5322 + quoted-printable + RFC 2047); never hand-roll MIME elsewhere.
 - Operator tasks (deploy, secrets, migrations, audit, rotating credentials) -> `docs/workflows/common-tasks.md`.
 - Why the project is one Worker and not two -> `docs/adr/0001-single-cloudflare-worker.md`.
 
