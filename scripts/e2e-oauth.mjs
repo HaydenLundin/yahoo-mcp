@@ -270,6 +270,41 @@ if (toolNames.includes("send_message")) {
   log("send tools absent (SEND_ENABLED is not true on this server); skipping phase-one checks");
 }
 
+// 5e. OPT-IN real send to self. Runs only with E2E_SEND_SELF=1 and only against a server whose
+// YAHOO_USER we can read from .dev.vars. Sends exactly one message, from the account to itself.
+if (process.env.E2E_SEND_SELF === "1" && toolNames.includes("send_message")) {
+  const { readFileSync } = await import("node:fs");
+  const selfAddr = readFileSync(new URL("../.dev.vars", import.meta.url), "utf8")
+    .split(/\r?\n/)
+    .map((l) => /^YAHOO_USER=(.+)$/.exec(l)?.[1]?.trim())
+    .find(Boolean);
+  if (!selfAddr) fail("YAHOO_USER not found in .dev.vars");
+  const subject = `yahoo-mcp test send ${stamp}`;
+  const prepared = await tool("send_message", {
+    to: [selfAddr],
+    subject,
+    body_text: "This is a one-time test send from yahoo-mcp (milestone 5). Safe to delete.",
+  });
+  const confirmed = await tool("confirm_send", { confirm_token: prepared.data.confirm_token });
+  if (confirmed.data.sent !== true || confirmed.data.accepted !== 1) fail(`confirm_send shape: ${JSON.stringify(confirmed.data)}`);
+  log(`confirm_send ok in ${confirmed.ms} ms: accepted=${confirmed.data.accepted} rejected=${confirmed.data.rejected.length} saved_to_sent=${confirmed.data.saved_to_sent} message_id=${confirmed.data.message_id ? "yes" : "no"}`);
+
+  let arrived = null;
+  for (let i = 0; i < 12 && !arrived; i++) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const found = await tool("search_messages", { subject, limit: 5 });
+    arrived = found.data.messages[0] ?? null;
+  }
+  if (!arrived) fail("test message did not arrive in INBOX within 60 s");
+  log(`arrived in INBOX as uid ${arrived.uid}, unread=${arrived.unread}`);
+
+  const sentFolder = folders.find((f) => f.special_use === "sent")?.path;
+  if (!sentFolder) fail("no Sent folder");
+  const inSent = await tool("search_messages", { subject, folder: sentFolder, limit: 5 });
+  if (inSent.data.messages.length < 1) fail("no copy of the test message in Sent");
+  log(`copy filed in ${sentFolder} as uid ${inSent.data.messages[0].uid}`);
+}
+
 // 6. Refresh token rotation.
 const refresh = await fetch(as.token_endpoint, {
   method: "POST",
