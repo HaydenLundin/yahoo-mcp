@@ -11,6 +11,7 @@ interface Env {
 }
 interface LogEntry {
   level: string;
+  data?: string;
   msg?: string;
   err?: string;
   code?: string;
@@ -26,7 +27,7 @@ interface StructureNode {
   childNodes?: StructureNode[];
 }
 
-function makeClient(env: Env, log: LogEntry[], trace = false, noCompress = false): ImapFlow {
+function makeClient(env: Env, log: LogEntry[], trace = false, noCompress = false, cap = 80): ImapFlow {
   const capture = (level: string) => (entry: unknown) => {
     const e = (entry ?? {}) as {
       msg?: string;
@@ -38,8 +39,8 @@ function makeClient(env: Env, log: LogEntry[], trace = false, noCompress = false
     };
     const size = typeof e.data === "string" ? e.data.length : undefined;
     if (e.msg === "Socket timeout" || e.err?.message === "Socket timeout") return; // bursty shim noise
-    if (log.length < 80) {
-      log.push({ level, msg: e.msg, err: e.err?.message, code: e.err?.code, response: e.err?.responseText, src: e.src, cmd: e.cmd ?? e.command, size, t: Date.now() });
+    if (log.length < cap) {
+      log.push({ level, msg: e.msg, err: e.err?.message, code: e.err?.code, response: e.err?.responseText, src: e.src, cmd: e.cmd ?? e.command, size, data: typeof e.data === "string" ? e.data.slice(0, 220) : undefined, t: Date.now() });
     }
   };
   const quiet = trace ? capture("trace") : () => {};
@@ -75,8 +76,9 @@ async function session<T>(
   fn: (c: ImapFlow, step: (name: string) => void) => Promise<T>,
   trace = false,
   noCompress = false,
+  cap = 80,
 ): Promise<T | { failed: string; at: string; after_ms: number }> {
-  const c = makeClient(env, log, trace, noCompress);
+  const c = makeClient(env, log, trace, noCompress, cap);
   c.on("error", (e: unknown) => {
     if ((e as Error).message !== "Socket timeout") log.push({ level: "event", err: (e as Error).message });
   });
@@ -438,6 +440,32 @@ export default {
     // ?mode=flow reads in flowing mode; ?mode=pause pauses after the first chunk and resumes 100 ms later.
     // Experiment 4: raw socket piped into a Transform that defers its callback like imapflow's
     // parser does (?patch=1 disables pause on the socket). Separates stream machinery from imapflow.
+    if (url.pathname === "/download") {
+      // imapflow's own download() under a protocol trace, for postalsys/imapflow#426: which rows come
+      // back for each window and where the stream ends. One login. ?chunk= sets chunkSize.
+      const uid = Number(url.searchParams.get("uid"));
+      const part = (url.searchParams.get("part") ?? "2").toLowerCase();
+      const chunk = Number(url.searchParams.get("chunk") ?? 65_536);
+      const noCompress = url.searchParams.get("nocompress") === "1";
+      const dlog: LogEntry[] = [];
+      const t0 = Date.now();
+      const res = await session(
+        env,
+        dlog,
+        async (c, step) => {
+          if (!c.mailbox) await c.mailboxOpen("INBOX");
+          step("download");
+          const got = await readAll(await c.download(String(uid), part, { uid: true, chunkSize: chunk }));
+          return { uid, part, chunk, compression: !noCompress, bytes: "bytes" in got ? got.bytes : 0, empty: "empty" in got };
+        },
+        true,
+        noCompress,
+        400,
+      );
+      const protocol = dlog.filter((e) => e.src || e.cmd);
+      return Response.json({ ...res, ms: Date.now() - t0, log_entries: dlog.length, protocol, tail: dlog.slice(-40) });
+    }
+
     if (url.pathname === "/ranged") {
       // Mirror of src/lib/imap.ts downloadText: fixed-size BODY.PEEK[part]<start.len> windows until a
       // short one. Reports every raw window length so a window that comes back short can be told apart

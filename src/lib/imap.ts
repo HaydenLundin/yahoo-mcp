@@ -14,7 +14,7 @@ const YAHOO_IMAP = { host: "imap.mail.yahoo.com", port: 993 } as const;
  * never processed (postalsys/imapflow#408, fixed in 2.1.0). COMPRESS=DEFLATE makes the race
  * near-certain because the inflater hands over several 16 KiB chunks per socket read; plain TLS
  * delivers one chunk per read, so disabling compression hid it for a while. A standalone inflate
- * test (spike/zlib-lab) shows workerd's zlib itself is fine. Upgraded to imapflow 2.2.8 on
+ * test (spike/zlib-lab) shows workerd's zlib itself is fine. Upgraded to imapflow 2.2.10 on
  * 2026-10-07 and compression left at the library default (on) after the spike probe and the e2e
  * passed with it; if large responses ever stall again, check imapflow's input loop before zlib.
  *

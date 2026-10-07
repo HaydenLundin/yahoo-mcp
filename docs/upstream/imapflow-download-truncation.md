@@ -1,42 +1,48 @@
-# Draft issue for postalsys/imapflow
+# postalsys/imapflow#426: `download()` ends after its first chunk on Yahoo
 
-Status: not filed. Observation-grade: the data below is solid, but there is no standalone repro yet, so either file it as a report with the numbers or spend an hour on a Miniflare repro first. Paste into https://github.com/postalsys/imapflow/issues/new when ready. Filing is a public action in the operator's name.
+Status: **filed by the operator on 2026-10-07** as https://github.com/postalsys/imapflow/issues/426, closed the same day by commit 74fad57, released in 2.2.10. The fix makes `fetchOne()` merge the rows of the requested message when a FETCH answer also carries unsolicited rows. **Our re-test on 2.2.10 still ends early**, and a protocol trace shows a different mechanism. The follow-up comment below is drafted, not posted. Posting is a public action in the operator's name.
+
+Repro tool: spike route `GET /download?uid=<uid>&part=<part>&chunk=<bytes>` (`spike/index.ts`) runs `download()` under imapflow's own protocol trace and returns the exchange. One Yahoo login per call.
 
 ---
 
-**Title:** Cloudflare Workers: `download()` sometimes ends after its first chunk; ranged `fetchOne` windows for the same part are always complete
+## Draft follow-up comment for #426
 
-**Describe the bug**
+Thanks for the quick fix. We re-tested on 2.2.10 (the `ID` line in the trace confirms the version) and the early end still happens on Yahoo. A protocol trace of a short run shows no unsolicited rows at all. The server answers the continuation window with an **empty string** instead of the requested literal, and then `OK`:
 
-On Cloudflare Workers (`nodejs_compat`), `client.download(uid, part, { uid: true })` of a 183,558-byte quoted-printable `text/html` part sometimes yields only the first chunk and then ends the stream cleanly, with no error. Which run comes up short varies:
+```
+8 UID FETCH 228553 (UID RFC822.SIZE EMAILID BODY.PEEK[2.MIME] BODY.PEEK[2]<0.65536>)
+* 9207 FETCH (UID 228553 RFC822.SIZE 199310 EMAILID (AAGaP8jJ9b3Z5wjGJjyVwXGDxMQ) BODY[2.MIME] {109} BODY[2]<0> {65536})
+8 OK UID FETCH completed
+9 UID FETCH 228553 (EMAILID UID BODY.PEEK[2]<65536.65536>)
+* 9207 FETCH (UID 228553 EMAILID (AAGaP8jJ9b3Z5wjGJjyVwXGDxMQ) BODY[2]<65536> "")
+9 OK UID FETCH completed
+A LOGOUT
+```
 
-| run | runtime | `chunkSize` | bytes received (decoded) |
-|---|---|---|---|
-| 1 | `wrangler dev` (workerd 1.20260908.1) | 65536 (default) | 64,156 of ~174,045 |
-| 1 | same session | 12,000 | 174,045 (complete) |
-| 2 | production edge via `wrangler dev --remote` | 65536 (default) | 174,045 (complete) |
-| 2 | same session | 12,000 | 11,792 |
+The identical request in a successful run, one minute earlier, got `BODY[2]<65536> {65536}` and the download continued to 174,045 decoded bytes (183,558 raw). The part is 183,558 bytes long, so `<65536.65536>` is well inside it.
 
-A plain loop of `fetchOne(uid, { uid: true, bodyParts: [{ key, start, maxLength }] })` windows over the same part, which is what we use in production, returned all 183,558 raw bytes in every run: four windows of 60,000 and three of 65,536, with `COMPRESS=DEFLATE` on and off, locally and on the edge. So the socket, the parser, and the server's partial fetches are fine; whatever stops early is inside `download()`.
+What we have observed across runs today, all against `imap.mail.yahoo.com` with `COMPRESS=DEFLATE` on, from Cloudflare Workers (local workerd 1.20260908.1 and the production edge):
 
-**To reproduce**
+| Call shape | Runs | Result |
+|---|---|---|
+| `download()` default 64 KiB chunks | 6 | 3 complete, 3 ended after the first window with the server returning `""` |
+| `download()` with `chunkSize: 12000` | 4 | 2 complete (15 windows), 2 ended after the first window |
+| Our own loop of `fetchOne(uid, { uid: true, bodyParts: [{ key, start, maxLength }] })`, 60,000 or 65,536 byte windows | 8 | 8 complete, every window full length |
 
-1. Yahoo Mail IMAP (`imap.mail.yahoo.com:993`), a message with a large QP text part (ours: 199 KB message, part `2`).
-2. In a Worker: `await client.download(String(uid), "2", { uid: true })`, read the stream to the end, count bytes.
-3. Repeat a few times, also with `chunkSize: 12000`. Some runs stop after the first chunk.
+The visible difference between the two shapes is that `download()`'s continuation requests include `EMAILID` (`(EMAILID UID BODY.PEEK[2]<65536.65536>)`) while our loop sends `(UID BODY.PEEK[2]<60000.60000>)`. The failing responses came from different Yahoo backend hosts (`jimap400010`, `jimap400170`, `jimap400135` appear in the `ID` replies), so it may be a backend-specific quirk rather than something deterministic.
 
-Plain Node with the same code and mailbox has not shown this in our runs.
+Two thoughts, offered without certainty:
 
-**Expected behavior**
+1. If the empty partial is a Yahoo server bug, `download()` could still defend against it: when a window returns zero bytes but the previous window was full length and the offset is below any known size, retry the window once (or once without `EMAILID`) before treating it as the end. Right now the stream ends cleanly and the caller has no way to tell a short part from a truncated one.
+2. It may be worth checking whether requesting `EMAILID` together with a partial body section is what provokes the empty answer. We did not isolate that; our control loop never asked for `EMAILID`.
 
-The stream delivers the whole part, or errors.
+Full traces for the three runs are available on request. Environment: imapflow 2.2.10 ESM build, wrangler 4.130.0, `compatibility_date: "2026-09-01"`, `nodejs_compat`.
 
-**Environment**
+---
 
-- imapflow 2.2.8 (ESM build), wrangler 4.130.0, workerd 1.20260908.1 and the production edge, 2026-10-07
-- `compatibility_date: "2026-09-01"`, `compatibility_flags: ["nodejs_compat"]`
-- Server: Yahoo Mail IMAP, `COMPRESS=DEFLATE` advertised and in use (the ranged control was also run with `disableCompression: true`)
+## Notes for this project
 
-**Additional context**
-
-Looking at `downloadMessage()` in 2.2.8, the loop ends when `chunk.length !== chunkSize`, and `getNextPart()` returns `{}` without error when `fetchExpected()` yields no response or no body part. Since the server's windows are full-length in the raw probes, the early end is most likely one of those `{}` returns, for example the response of a later window not being matched to the download. We did not dig further because our code does not use `download()`.
+- Our tools never call `download()`; `downloadText` in `src/lib/imap.ts` is the `fetchOne` window loop in the table, complete in every run so far.
+- `downloadText` would also stop on an empty window (`chunk.length === 0`) and return a silently shortened body. We have not seen Yahoo do that to a request without `EMAILID`, but if a user ever reports a cut-off body, this is the first place to look, and a one-shot retry of an empty window is the obvious hardening.
+- Trace files from 2026-10-07 were kept in the session scratchpad only; the spike route regenerates them in seconds.
