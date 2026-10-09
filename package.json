@@ -1,6 +1,6 @@
 {
   "name": "yahoo-mcp",
-  "version": "0.0.0",
+  "version": "1.0.0-rc.1",
   "private": true,
   "type": "module",
   "description": "Remote MCP server exposing a Yahoo Mail account to AI clients with Gmail-connector-parity permissions.",

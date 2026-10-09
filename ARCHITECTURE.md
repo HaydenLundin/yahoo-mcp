@@ -397,6 +397,7 @@ Every tool error is returned as `CODE: message` in a single text content item wi
 | `IMAP_CONNECT_FAILED` | could not reach or lost the IMAP server | network, timeout, server closed |
 | `IMAP_SEARCH_FAILED`, `IMAP_MOVE_FAILED`, `IMAP_STORE_FAILED`, `IMAP_APPEND_FAILED`, `IMAP_DELETE_FAILED` | Yahoo refused that command | server-side policy or state |
 | `IMAP_<RESPONSE-CODE>` | Yahoo returned a standard response code, surfaced verbatim | `IMAP_NONEXISTENT`, `IMAP_TRYCREATE` |
+| `IMAP_FETCH_INCOMPLETE` | a body window came back short of the size Yahoo declared, twice in a row | server hiccup; retry the call |
 | `SMTP_AUTH_FAILED` | Yahoo SMTP rejected the app password | as above |
 | `SMTP_RECIPIENT_REJECTED` | every recipient was refused | bad address, relaying denied |
 | `SMTP_MESSAGE_REJECTED` | Yahoo refused the sender or the message data | policy, size |

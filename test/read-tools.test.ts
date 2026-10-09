@@ -228,6 +228,27 @@ describe("get_message", () => {
     expect(FakeImapFlow.calls.some((c) => c.startsWith("download:"))).toBe(false);
   });
 
+  it("asks again for a body window that comes back empty and still returns the whole body", async () => {
+    FakeImapFlow.emptyWindows.set(`104:1:${IMAP_CHUNK_BYTES}`, 1);
+    const { raw, data } = await h.call("get_message", { uid: 104 });
+    expect(raw.isError).toBeFalsy();
+    const d = data as { body: string; truncated: boolean };
+    // 60,000 x's arrive only if the second window was fetched; a cut body would be 45,000 and uncapped.
+    expect(d.body.startsWith("x".repeat(1000))).toBe(true);
+    expect(d.truncated).toBe(true);
+    const secondWindow = FakeImapFlow.calls.filter((c) => c === `bodyPart:104:1:${IMAP_CHUNK_BYTES}:${IMAP_CHUNK_BYTES}`);
+    expect(secondWindow).toHaveLength(2);
+  });
+
+  it("refuses to return a cut body: a window that stays empty is IMAP_FETCH_INCOMPLETE", async () => {
+    FakeImapFlow.emptyWindows.set(`104:1:${IMAP_CHUNK_BYTES}`, 5);
+    const { raw, data } = await h.call("get_message", { uid: 104 });
+    expect(raw.isError).toBe(true);
+    expect(String(data).startsWith("IMAP_FETCH_INCOMPLETE:")).toBe(true);
+    expect(String(data)).toContain(`${IMAP_CHUNK_BYTES} of `);
+    expect(h.db.rows.at(-1)).toMatchObject({ tool: "get_message", outcome: "error" });
+  });
+
   it("decodes quoted-printable, base64, and legacy charsets", async () => {
     const latin = await h.call("get_message", { uid: 105, folder: "Archive" });
     expect(latin.data).toMatchObject({ body: "café", body_format: "text" });

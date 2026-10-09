@@ -23,7 +23,13 @@ import {
 describe("selectBodyParts", () => {
   it("addresses a single-part message as part 1 and carries its encoding and charset", () => {
     expect(selectBodyParts(MSG_PLAIN.structure)).toEqual({
-      text: { id: "1", mime: "text/plain", encoding: "7bit", charset: "utf-8" },
+      text: {
+        id: "1",
+        mime: "text/plain",
+        encoding: "7bit",
+        charset: "utf-8",
+        size: 100,
+      },
     });
     expect(selectBodyParts(MSG_LATIN1.structure).text).toMatchObject({
       id: "1",

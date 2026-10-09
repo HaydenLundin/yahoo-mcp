@@ -18,6 +18,8 @@ export interface BodyPart {
   mime: string;
   encoding?: string;
   charset?: string;
+  /** Transfer-encoded size from BODYSTRUCTURE when the server reported one. Yahoo's matches the bytes BODY[part] serves exactly. */
+  size?: number;
 }
 
 export interface BodyParts {
@@ -46,6 +48,7 @@ function toBodyPart(node: MessageStructureObject): BodyPart {
     mime: node.type.toLowerCase(),
     encoding: node.encoding?.toLowerCase(),
     charset: node.parameters?.charset?.toLowerCase(),
+    size: typeof node.size === "number" ? node.size : undefined,
   };
 }
 

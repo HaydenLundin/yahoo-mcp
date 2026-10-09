@@ -186,6 +186,11 @@ async function locked<T>(
  * Download one body part as text. Fetches `BODY.PEEK[part]<start.IMAP_CHUNK_BYTES>` ranges until
  * the part ends or `maxBytes` raw bytes have arrived, then transfer-decodes and charset-decodes
  * using what BODYSTRUCTURE said about the part.
+ *
+ * A window that comes back short of the size BODYSTRUCTURE declared is not the end of the part:
+ * Yahoo has been seen answering a mid-part window with nothing and OK (postalsys/imapflow#426).
+ * Such a window is requested once more, then the call fails with IMAP_FETCH_INCOMPLETE rather
+ * than returning a silently cut body.
  */
 export async function downloadText(
   client: ImapFlow,
@@ -196,6 +201,9 @@ export async function downloadText(
   const key = part.id.toLowerCase();
   const chunks: Uint8Array[] = [];
   let received = 0;
+  // How much the server owes us before maxBytes stops the loop; null when the size is unknown.
+  const owed = part.size === undefined ? null : Math.min(part.size, maxBytes);
+  let retriedAt = -1;
   while (received < maxBytes) {
     const msg = await client.fetchOne(
       String(uid),
@@ -206,10 +214,23 @@ export async function downloadText(
       { uid: true },
     );
     const chunk = msg ? msg.bodyParts?.get(key) : undefined;
-    if (!chunk || chunk.length === 0) break;
-    chunks.push(chunk);
-    received += chunk.length;
-    if (chunk.length < IMAP_CHUNK_BYTES) break;
+    const got = chunk?.length ?? 0;
+    const short = got < IMAP_CHUNK_BYTES;
+    if (short && owed !== null && received + got < owed) {
+      if (retriedAt !== received) {
+        retriedAt = received;
+        continue;
+      }
+      throw new ToolError(
+        "IMAP_FETCH_INCOMPLETE",
+        `Yahoo returned ${received + got} of ${part.size} bytes for part ${part.id} of message ${uid}. Retrying the call usually succeeds.`,
+      );
+    }
+    if (chunk && got > 0) {
+      chunks.push(chunk);
+      received += got;
+    }
+    if (short) break;
   }
   if (received === 0) return "";
   const raw = new Uint8Array(received);

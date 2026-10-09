@@ -51,6 +51,8 @@ export class FakeImapFlow {
   static calls: string[] = [];
   static failConnect: unknown = null;
   static rejectThreadIdSearch = false;
+  /** `uid:part:start` -> how many more times that body window should come back empty (a Yahoo hiccup). */
+  static emptyWindows = new Map<string, number>();
   /** The socket object of the most recently constructed client, to assert the backpressure patch. */
   static lastSocket: { pauses: number; pause: () => unknown } | null = null;
 
@@ -59,6 +61,7 @@ export class FakeImapFlow {
     FakeImapFlow.calls = [];
     FakeImapFlow.failConnect = null;
     FakeImapFlow.rejectThreadIdSearch = false;
+    FakeImapFlow.emptyWindows = new Map();
     FakeImapFlow.lastSocket = null;
   }
 
@@ -311,7 +314,7 @@ export class FakeImapFlow {
     if (query.flags) out.flags = new Set(m.flags ?? []);
     if (query.size) out.size = m.size;
     if (query.envelope) out.envelope = m.envelope;
-    if (query.bodyStructure) out.bodyStructure = m.structure;
+    if (query.bodyStructure) out.bodyStructure = withSizes(m.structure, m.parts);
     if (query.threadId) out.threadId = m.threadId;
     if (query.internalDate) out.internalDate = m.internalDate;
     if (query.headers) out.headers = Buffer.from(m.headers ?? "", "utf8");
@@ -330,6 +333,13 @@ export class FakeImapFlow {
         FakeImapFlow.calls.push(
           `bodyPart:${m.uid}:${key}:${start}:${maxLength}`,
         );
+        const fault = `${m.uid}:${key}:${start}`;
+        const left = FakeImapFlow.emptyWindows.get(fault) ?? 0;
+        if (left > 0) {
+          FakeImapFlow.emptyWindows.set(fault, left - 1);
+          out.bodyParts.set(key, Buffer.alloc(0));
+          continue;
+        }
         out.bodyParts.set(
           key,
           bytes.subarray(start, Math.min(bytes.length, start + maxLength)),
@@ -338,6 +348,24 @@ export class FakeImapFlow {
     }
     return out;
   }
+}
+
+/** Like Yahoo, declare each served leaf's size as exactly the bytes BODY[part] will return. */
+function withSizes(
+  node: MessageStructureObject,
+  parts: FakeMessage["parts"],
+): MessageStructureObject {
+  if (node.childNodes?.length) {
+    return {
+      ...node,
+      childNodes: node.childNodes.map((c) => withSizes(c, parts)),
+    };
+  }
+  const raw = parts?.[node.part ?? "1"];
+  if (raw === undefined) return node;
+  const size =
+    typeof raw === "string" ? Buffer.byteLength(raw, "utf8") : raw.byteLength;
+  return { ...node, size };
 }
 
 function nextUid(folder: FakeFolder): number {
