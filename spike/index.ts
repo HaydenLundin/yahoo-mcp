@@ -24,6 +24,7 @@ interface LogEntry {
 interface StructureNode {
   type: string;
   part?: string;
+  size?: number;
   childNodes?: StructureNode[];
 }
 
@@ -127,6 +128,15 @@ function firstTextPart(node: StructureNode, want = "text/"): string {
     return "";
   }
   return node.type.toLowerCase().startsWith(want) ? (node.part ?? "1") : "";
+}
+
+function findPart(node: StructureNode, id: string): StructureNode | undefined {
+  if ((node.part ?? "1") === id && !node.childNodes?.length) return node;
+  for (const child of node.childNodes ?? []) {
+    const hit = findPart(child, id);
+    if (hit) return hit;
+  }
+  return undefined;
 }
 
 async function readAll(d: { content?: AsyncIterable<Uint8Array> }): Promise<{ bytes: number } | { empty: true }> {
@@ -470,10 +480,11 @@ export default {
       // Mirror of src/lib/imap.ts downloadText: fixed-size BODY.PEEK[part]<start.len> windows until a
       // short one. Reports every raw window length so a window that comes back short can be told apart
       // from a legitimately short tail. ?nocompress=1 turns COMPRESS=DEFLATE off for comparison.
-      const uid = Number(url.searchParams.get("uid"));
-      const part = (url.searchParams.get("part") ?? "2").toLowerCase();
+      const uidParam = url.searchParams.get("uid") ?? "last";
+      const partParam = (url.searchParams.get("part") ?? "auto").toLowerCase();
       const chunk = Number(url.searchParams.get("chunk") ?? 60_000);
       const noCompress = url.searchParams.get("nocompress") === "1";
+      const withEmailId = url.searchParams.get("emailid") === "1"; // test: does EMAILID provoke the empty partial?
       const rlog: LogEntry[] = [];
       const t0 = Date.now();
       const res = await session(
@@ -481,18 +492,34 @@ export default {
         rlog,
         async (c, step) => {
           if (!c.mailbox) await c.mailboxOpen("INBOX");
+          // uid=last[-N] picks a recent message by sequence; part=auto picks the first text/html, else text/* leaf.
+          let uid = uidParam.startsWith("last") ? 0 : Number(uidParam);
+          let part = partParam;
+          let declaredSize: number | null = null;
+          {
+            const exists = c.mailbox && typeof c.mailbox === "object" ? c.mailbox.exists : 0;
+            const back = uidParam.startsWith("last-") ? Number(uidParam.slice(5)) : 0;
+            const target = uid ? String(uid) : String(Math.max(1, exists - back));
+            const meta = await c.fetchOne(target, { uid: true, bodyStructure: true }, { uid: uid > 0 });
+            if (!meta) return { failed: "no such message" };
+            uid = meta.uid;
+            const root = meta.bodyStructure as StructureNode | undefined;
+            if (part === "auto" && root) part = firstTextPart(root, "text/html") || firstTextPart(root) || "1";
+            const node = root ? findPart(root, part) : undefined;
+            declaredSize = node && typeof node.size === "number" ? node.size : null;
+          }
           const lengths: number[] = [];
           let received = 0;
           for (let i = 0; i < 40; i++) {
             step(`window ${i} @${received}`);
-            const msg = await c.fetchOne(String(uid), { uid: true, bodyParts: [{ key: part, start: received, maxLength: chunk }] }, { uid: true });
+            const msg = await c.fetchOne(String(uid), { uid: true, emailId: withEmailId, bodyParts: [{ key: part, start: received, maxLength: chunk }] }, { uid: true });
             const buf = msg ? msg.bodyParts?.get(part) : undefined;
             const len = buf ? buf.length : 0;
             lengths.push(len);
             received += len;
             if (len < chunk) break;
           }
-          return { uid, part, chunk, compression: !noCompress, windows: lengths.length, lengths, total_raw: received };
+          return { uid, part, chunk, compression: !noCompress, emailid: withEmailId, windows: lengths.length, lengths, total_raw: received, declared_size: declaredSize, size_matches: declaredSize === received };
         },
         false,
         noCompress,

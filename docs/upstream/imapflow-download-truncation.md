@@ -1,6 +1,6 @@
 # postalsys/imapflow#426: `download()` ends after its first chunk on Yahoo
 
-Status: **filed by the operator on 2026-10-07** as https://github.com/postalsys/imapflow/issues/426, closed the same day by commit 74fad57, released in 2.2.10. The fix makes `fetchOne()` merge the rows of the requested message when a FETCH answer also carries unsolicited rows. **Our re-test on 2.2.10 still ends early**, and a protocol trace shows a different mechanism. The follow-up comment below is drafted, not posted. Posting is a public action in the operator's name.
+Status: **filed by the operator on 2026-10-07** as https://github.com/postalsys/imapflow/issues/426, closed the same day by commit 74fad57, released in 2.2.10. The fix makes `fetchOne()` merge the rows of the requested message when a FETCH answer also carries unsolicited rows. **Our re-test on 2.2.10 still ends early**, and a protocol trace shows a different mechanism. The follow-up comment below was posted by the operator on 2026-10-07; no reply as of 2026-10-09. **Update 2026-10-09:** thought 2 in the comment, the `EMAILID` lead, was tested and ruled out. Our window loop with `emailId: true` completed 6 of 6 runs (`spike /ranged?emailid=1`), so whatever trips `download()` is specific to its own mechanics.
 
 Repro tool: spike route `GET /download?uid=<uid>&part=<part>&chunk=<bytes>` (`spike/index.ts`) runs `download()` under imapflow's own protocol trace and returns the exchange. One Yahoo login per call.
 
@@ -44,5 +44,5 @@ Full traces for the three runs are available on request. Environment: imapflow 2
 ## Notes for this project
 
 - Our tools never call `download()`; `downloadText` in `src/lib/imap.ts` is the `fetchOne` window loop in the table, complete in every run so far.
-- `downloadText` would also stop on an empty window (`chunk.length === 0`) and return a silently shortened body. We have not seen Yahoo do that to a request without `EMAILID`, but if a user ever reports a cut-off body, this is the first place to look, and a one-shot retry of an empty window is the obvious hardening.
+- `downloadText` would also stop on an empty window (`chunk.length === 0`) and return a silently shortened body with `truncated: false`. Investigated 2026-10-09: 20 of 20 window-loop runs complete (local and edge, 60,000 and 65,536 byte windows, with and without `EMAILID`), and Yahoo's BODYSTRUCTURE part size matched the fetched bytes exactly in 6 of 6 parts. Exposure is real in shape (bodies over 60 KB raw take up to four windows) but unobserved. Proposed hardening: carry the declared part size into `BodyPart`, retry a window that comes back short of it once, then fail with a stable error code instead of returning a cut body.
 - Trace files from 2026-10-07 were kept in the session scratchpad only; the spike route regenerates them in seconds.
