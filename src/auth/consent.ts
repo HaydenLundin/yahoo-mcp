@@ -67,13 +67,13 @@ authApp.on(["GET", "POST"], "/authorize", async (c) => {
   if (operator instanceof Response) return operator;
 
   let authReq: AuthRequest;
+  let client: ClientInfo | null;
   try {
     authReq = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw);
+    client = await c.env.OAUTH_PROVIDER.lookupClient(authReq.clientId);
   } catch (err) {
     return authorizationErrorResponse(err);
   }
-
-  const client = await c.env.OAUTH_PROVIDER.lookupClient(authReq.clientId);
   if (!client) return c.text("Unknown OAuth client", 400);
 
   const granted = resolveScopes(authReq.scope);
@@ -141,6 +141,13 @@ function resolveScopes(requested: string[]): Scope[] {
 
 /** Mirrors the provider README: render locally unless the client and redirect URI were validated. */
 function authorizationErrorResponse(err: unknown): Response {
+  if (isClientLookupError(err)) {
+    console.warn("OAuth client lookup failed:", err.message);
+    return new Response(
+      "invalid_client: the client_id could not be resolved",
+      { status: 400 },
+    );
+  }
   if (!isAuthorizationError(err)) throw err;
   if (!err.redirectUri)
     return new Response(`${err.code}: ${err.description}`, { status: 400 });
@@ -149,7 +156,21 @@ function authorizationErrorResponse(err: unknown): Response {
   redirect.searchParams.set("error_description", err.description);
   if (err.state) redirect.searchParams.set("state", err.state);
   if (err.issuer) redirect.searchParams.set("iss", err.issuer);
-  return Response.redirect(redirect.toString(), 302);
+  // A plain Response rather than Response.redirect(): that one carries immutable headers,
+  // and the security-headers middleware would throw while adding CSP, turning the OAuth
+  // error into a 500.
+  return new Response(null, {
+    status: 302,
+    headers: { location: redirect.toString() },
+  });
+}
+
+/** The provider throws its own error class when a URL-shaped client_id cannot be fetched or parsed. */
+function isClientLookupError(err: unknown): err is Error {
+  return (
+    err instanceof Error &&
+    (err.name === "CimdFetchError" || "metadataUrl" in err)
+  );
 }
 
 /**

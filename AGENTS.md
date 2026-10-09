@@ -25,7 +25,7 @@ pnpm audit:tail           # last 50 audit rows from production D1
 - Message bodies never reach logs or the audit table. Audit digests exclude `body_text`, `body_html`, `note`.
 - Secrets never enter the repo. Local dev reads `.dev.vars` (gitignored). Production uses `wrangler secret put`.
 - `ACCESS_DEV_BYPASS=true` works only for localhost hosts. Production requires `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD`.
-- MCP is stateless: fresh `McpServer` per request, JSON responses, no Durable Objects. Send tools are registered only when `SEND_ENABLED === "true"`.
+- MCP is stateless: fresh `McpServer` per request, JSON responses, no Durable Objects. Send tools are registered only when `SEND_ENABLED === "true"`. Tools are registered per grant scope (`props.scopes`: mail.read, mail.draft, mail.organize, mail.send); a client that asked for fewer scopes sees fewer tools, and no tool may be registered outside its scope group.
 - `pnpm deploy` is pnpm's built-in command, not our script; use `pnpm run deploy`.
 - Operator HTML lives under `/authorize/*` so one Cloudflare Access application covers it. Never add operator pages elsewhere without adding Access in front of them.
 - pnpm 10: `workerd` and `esbuild` build scripts are allowlisted in `package.json`; keep them.

@@ -8,6 +8,7 @@ import {
 } from "jose";
 import { requireOperator } from "../src/auth/access";
 import { buildMessage, parseAddress } from "../src/lib/compose";
+import { normalizeError } from "../src/lib/errors";
 import type { Env } from "../src/types";
 
 /**
@@ -273,5 +274,15 @@ describe("outgoing mail cannot be shaped by header injection", () => {
     const to = headerBlock(raw).find((l) => l.startsWith("To:")) ?? "";
     expect(to).toContain("<friend@example.com>");
     expect(headerBlock(raw).filter((l) => /^To:/.test(l))).toHaveLength(1);
+  });
+});
+
+describe("IMAP refusals are reported as the caller's mistake", () => {
+  it("maps imapflow refusing to quote a hostile string to INVALID_ARGUMENT, not INTERNAL", () => {
+    const err = Object.assign(
+      new Error("Unquotable character in IMAP string value"),
+      { code: "InvalidStringValue" },
+    );
+    expect(normalizeError(err).code).toBe("INVALID_ARGUMENT");
   });
 });

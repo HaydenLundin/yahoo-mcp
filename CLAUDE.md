@@ -39,6 +39,7 @@ pnpm audit:tail           # last 50 audit rows from production D1
 - Tests: `pnpm test` runs vitest in the node environment; `test/helpers/fake-imap.ts` stands in for ImapFlow via `vi.mock("imapflow")`, and `test/helpers/harness.ts` wires `buildServer()` to an in-memory MCP client so tools are exercised exactly as a client sees them. `scripts/e2e-oauth.mjs` covers the real runtime path against `wrangler dev`. Add a fixture and a test for every new tool.
 - Audit writes are awaited inside `runTool()`, never deferred with `waitUntil`, so a row exists before the client sees the result.
 - Send tools register only when `SEND_ENABLED === "true"`; locally that is `.dev.vars`, in production a secret. The e2e script never calls `confirm_send`; a real send needs the operator's explicit go-ahead.
+- Tools are registered per grant: `buildServer` reads `props.scopes` (`mail.read`, `mail.draft`, `mail.organize`, `mail.send`). A client that asked for fewer scopes sees fewer tools; never register a tool outside its scope group.
 
 ## Sync rule
 

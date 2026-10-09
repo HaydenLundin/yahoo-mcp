@@ -137,7 +137,7 @@ export default new OAuthProvider({
 ```
 - Access tokens opaque, stored hashed in KV by the library.
 - Refresh tokens rotate on use.
-- Consent screen shows the client's registered name + requested scopes; approve button only. (Single user; no per-scope toggles in v1. Scopes are still recorded on the grant for audit.)
+- Consent screen shows the client's registered name + requested scopes; approve button only. (Single user; no per-scope toggles in v1. Scopes are still recorded on the grant for audit.) The grant's scopes decide which tool groups the server registers for that client (read and the aliases, draft, organize, send); a client that asked for less sees less, and send additionally needs `SEND_ENABLED`.
 - Grant `props` = `{ clientId, clientName, scopes, grantedAt }` → available to every tool call for the audit log.
 
 **Secrets** (`wrangler secret put`): `YAHOO_USER`, `YAHOO_APP_PASSWORD`, `SEND_ENABLED` (`"true"|"false"`), `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`.

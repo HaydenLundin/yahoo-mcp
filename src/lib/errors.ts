@@ -41,6 +41,14 @@ export function normalizeError(err: unknown): ToolError {
       "Yahoo rejected the app password. Generate a new one and run `wrangler secret put YAHOO_APP_PASSWORD`.",
     );
   }
+  if (e.code === "InvalidStringValue") {
+    // imapflow refused to put the value on the wire (control characters, quotes it cannot
+    // escape). Nothing reached Yahoo; the argument was bad.
+    return new ToolError(
+      "INVALID_ARGUMENT",
+      "A folder name or search value contains characters IMAP cannot carry (control characters or unescapable quotes).",
+    );
+  }
   if (e.code && CONNECT_CODES.has(e.code)) {
     return new ToolError(
       "IMAP_CONNECT_FAILED",

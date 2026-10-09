@@ -5,6 +5,7 @@ import { registerOrganizeTools } from "./tools/organize";
 import { registerReadTools } from "./tools/read";
 import { registerSendTools } from "./tools/send";
 import type { ToolDeps } from "./tool";
+import type { Scope } from "../types";
 
 export const SERVER_INFO = { name: "yahoo-mcp", version: "1.0.0-rc.1" } as const;
 
@@ -16,15 +17,22 @@ search and fetch are aliases for connector frameworks that require those names; 
 
 /**
  * A fresh McpServer per request. The server is stateless (no session ids), so every
- * request rebuilds the tool list from the current env; that is what makes the
- * SEND_ENABLED kill switch take effect on the next request without a redeploy.
+ * request rebuilds the tool list from the grant's scopes and the current env; that is
+ * what makes the SEND_ENABLED kill switch take effect on the next request without a
+ * redeploy, and what keeps a client the operator approved for reading from ever seeing
+ * a tool that writes (ARCHITECTURE.md section 5).
  */
 export function buildServer(deps: ToolDeps): McpServer {
   const server = new McpServer(SERVER_INFO, { instructions: INSTRUCTIONS });
-  registerReadTools(server, deps);
-  registerCompatTools(server, deps);
-  registerOrganizeTools(server, deps);
-  registerDraftTools(server, deps);
-  if (deps.env.SEND_ENABLED === "true") registerSendTools(server, deps);
+  const scopes = new Set<Scope>(deps.props.scopes);
+  if (scopes.has("mail.read")) {
+    registerReadTools(server, deps);
+    registerCompatTools(server, deps);
+  }
+  if (scopes.has("mail.organize")) registerOrganizeTools(server, deps);
+  if (scopes.has("mail.draft")) registerDraftTools(server, deps);
+  if (scopes.has("mail.send") && deps.env.SEND_ENABLED === "true") {
+    registerSendTools(server, deps);
+  }
   return server;
 }

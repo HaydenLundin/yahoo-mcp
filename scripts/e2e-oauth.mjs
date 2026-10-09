@@ -58,7 +58,7 @@ authUrl.search = new URLSearchParams({
   response_type: "code",
   client_id: client.client_id,
   redirect_uri: redirectUri,
-  scope: "mail.read mail.organize",
+  scope: "mail.read mail.draft mail.organize mail.send",
   state,
   code_challenge: challenge,
   code_challenge_method: "S256",
@@ -68,7 +68,7 @@ const consent = await fetch(authUrl, { redirect: "manual" });
 const consentHtml = await consent.text();
 if (consent.status !== 200) fail(`expected consent page 200, got ${consent.status}: ${consentHtml.slice(0, 300)}`);
 if (!consentHtml.includes("yahoo-mcp e2e")) fail("consent page does not show the client name");
-if (!consentHtml.includes("mail.read") || consentHtml.includes("mail.send")) {
+if (!["mail.read", "mail.draft", "mail.organize", "mail.send"].every((s) => consentHtml.includes(s))) {
   fail("consent page does not reflect requested scopes");
 }
 log("consent page ok");
@@ -158,6 +158,45 @@ const note = await fetch(`${base}/mcp`, {
 if (note.status !== 202 && note.status !== 200) fail(`notifications/initialized -> ${note.status}`);
 const tools = await rpc("tools/list", {});
 log("tools:", tools.tools.map((t) => `${t.name}${t.annotations?.readOnlyHint ? " [read-only]" : ""}`).join(", "));
+
+// 5a. A grant that asked for less gets less: a read-only client never sees a write tool.
+{
+  const ro = await (
+    await fetch(as.registration_endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ client_name: "yahoo-mcp e2e read-only", redirect_uris: [redirectUri], token_endpoint_auth_method: "none" }),
+    })
+  ).json();
+  const v = b64url(randomBytes(32));
+  const u = new URL(as.authorization_endpoint);
+  u.search = new URLSearchParams({
+    response_type: "code",
+    client_id: ro.client_id,
+    redirect_uri: redirectUri,
+    scope: "mail.read",
+    state: "ro",
+    code_challenge: b64url(createHash("sha256").update(v).digest()),
+    code_challenge_method: "S256",
+    resource: rm.resource,
+  }).toString();
+  const ap = await fetch(u, { method: "POST", redirect: "manual", headers: { ...form, origin: new URL(base).origin, "sec-fetch-site": "same-origin" }, body: "decision=approve" });
+  if (ap.status !== 302) fail(`read-only consent expected 302, got ${ap.status}`);
+  const roCode = new URL(ap.headers.get("location")).searchParams.get("code");
+  const roTok = await (
+    await fetch(as.token_endpoint, { method: "POST", headers: form, body: new URLSearchParams({ grant_type: "authorization_code", code: roCode, redirect_uri: redirectUri, client_id: ro.client_id, code_verifier: v, resource: rm.resource }) })
+  ).json();
+  if (!roTok.access_token) fail(`read-only token exchange failed: ${JSON.stringify(roTok)}`);
+  const roList = await fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: { ...mcpHeaders, authorization: `Bearer ${roTok.access_token}` },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 999, method: "tools/list", params: {} }),
+  });
+  const roTools = (await roList.json()).result.tools.map((t) => t.name);
+  const writes = roTools.filter((n) => !/^(list_folders|search_messages|get_message|get_thread|list_drafts|search|fetch)$/.test(n));
+  if (writes.length) fail(`read-only grant exposes write tools: ${writes.join(", ")}`);
+  log(`scope gating ok: read-only grant sees ${roTools.length} tools, none that write`);
+}
 const t0 = Date.now();
 const call = await rpc("tools/call", { name: "list_folders", arguments: {} });
 if (call.isError) fail(`list_folders returned error: ${call.content?.[0]?.text}`);
