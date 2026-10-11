@@ -3,6 +3,8 @@ import { FakeImapFlow } from "./helpers/fake-imap";
 import { bigFolder, yahooFolders } from "./helpers/fixtures";
 import { IMAP_CHUNK_BYTES } from "../src/lib/imap";
 import { startHarness, type Harness } from "./helpers/harness";
+import type { FakeFolder } from "./helpers/fake-imap";
+import type { MessageStructureObject } from "imapflow";
 
 vi.mock("imapflow", async () => {
   const { FakeImapFlow } = await import("./helpers/fake-imap");
@@ -326,6 +328,8 @@ describe("get_thread", () => {
       "Please find invoice 0042 attached.",
       "Got it & paid.\nThanks!",
     ]);
+    // One fetchOne for the target, then one body window per message: no structure refetch.
+    expect(FakeImapFlow.calls.filter((c) => c.startsWith("fetchOne:"))).toHaveLength(3);
   });
 
   it("returns just the message when it has no thread", async () => {
@@ -373,5 +377,77 @@ describe("audit and connection handling", () => {
   it("always logs out, even when the tool body throws", async () => {
     await h.call("get_message", { uid: 999 });
     expect(FakeImapFlow.calls.at(-1)).toBe("logout");
+  });
+});
+
+const THREAD_START = 2000;
+function bigThread(n: number): FakeFolder[] {
+  const structure = {
+    type: "text/plain",
+    encoding: "7bit",
+    size: 1,
+    parameters: { charset: "utf-8" },
+  } as MessageStructureObject;
+  return [
+    {
+      path: "INBOX",
+      messages: Array.from({ length: n }, (_, i) => ({
+        uid: THREAD_START + i,
+        flags: ["\\Seen"],
+        size: 100,
+        threadId: "T-big",
+        envelope: {
+          date: new Date(Date.UTC(2026, 5, 1) + i * 60_000),
+          subject: "Long thread",
+          messageId: `<t-${i}@x>`,
+          from: [{ address: "a@x.example" }],
+          to: [{ address: "me@yahoo.com" }],
+        },
+        structure,
+        parts: { "1": "x" },
+      })),
+    },
+  ];
+}
+
+describe("get_thread on a long thread", () => {
+  async function longThread() {
+    await h.close();
+    FakeImapFlow.reset(bigThread(60));
+    h = await startHarness();
+  }
+
+  it("keeps the requested message in the window when it is older than the newest 50", async () => {
+    await longThread();
+    const { data } = await h.call("get_thread", { uid: THREAD_START });
+    const d = data as {
+      truncated: boolean;
+      thread_size: number;
+      messages: Array<{ uid: number }>;
+    };
+    expect(d.truncated).toBe(true);
+    expect(d.thread_size).toBe(60);
+    expect(d.messages).toHaveLength(50);
+    expect(d.messages.map((m) => m.uid)).toContain(THREAD_START);
+  });
+
+  it("prefers the newest messages when the requested one is recent", async () => {
+    await longThread();
+    const { data } = await h.call("get_thread", { uid: THREAD_START + 59 });
+    const ids = (data as { messages: Array<{ uid: number }> }).messages.map(
+      (m) => m.uid,
+    );
+    expect(ids).toEqual(Array.from({ length: 50 }, (_, i) => THREAD_START + 10 + i));
+  });
+
+  it("surfaces a rate-limited THREADID search instead of falling back", async () => {
+    FakeImapFlow.threadIdSearchError = Object.assign(new Error("Command failed"), {
+      serverResponseCode: "LIMIT",
+      responseText: "AUTHENTICATE Rate limit hit.",
+    });
+    const { raw, data } = await h.call("get_thread", { uid: 103 });
+    expect(raw.isError).toBe(true);
+    expect(String(data).startsWith("IMAP_RATE_LIMITED:")).toBe(true);
+    expect(searchCalls()).toHaveLength(1);
   });
 });

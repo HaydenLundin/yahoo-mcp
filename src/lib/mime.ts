@@ -232,6 +232,9 @@ export function truncateText(
 
 export function formatAddress(a: MessageAddressObject): string {
   const addr = a.address ?? "";
+  // Group syntax ("undisclosed-recipients:;") and malformed entries have a name but no
+  // mailbox; nothing can be sent there, so yield nothing rather than "name <>".
+  if (!addr) return "";
   return a.name && a.name !== addr ? `${a.name} <${addr}>` : addr;
 }
 
@@ -264,6 +267,23 @@ export function parseHeaderBlock(
 export function splitMessageIds(value: string | undefined): string[] {
   if (!value) return [];
   return value.match(/<[^>]+>/g) ?? [];
+}
+
+/**
+ * In-Reply-To and References for a reply to `original`, from its ENVELOPE and raw headers.
+ * RFC 5322 section 3.6.4: the parent's References, or its In-Reply-To when it has none,
+ * followed by the parent's own id. Shared by reply_message and reply drafts.
+ */
+export function replyThreading(original: {
+  envelope?: { messageId?: string };
+  headers?: Uint8Array | string;
+}): { inReplyTo?: string; references?: string[] } {
+  const headers = parseHeaderBlock(original.headers);
+  const parentId = original.envelope?.messageId ?? headers["message-id"];
+  if (!parentId) return {};
+  const chain = splitMessageIds(headers.references);
+  const parents = chain.length ? chain : splitMessageIds(headers["in-reply-to"]);
+  return { inReplyTo: parentId, references: [...parents, parentId] };
 }
 
 export function toIsoDate(d: Date | string | undefined): string | null {

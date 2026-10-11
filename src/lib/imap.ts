@@ -169,7 +169,8 @@ export async function resolveSpecialUse(
   return match.path;
 }
 
-async function locked<T>(
+/** Select `path` and hold its lock while fn runs; released even when fn throws. */
+export async function locked<T>(
   client: ImapFlow,
   path: string,
   fn: (client: ImapFlow) => Promise<T>,

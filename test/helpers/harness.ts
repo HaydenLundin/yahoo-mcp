@@ -110,11 +110,16 @@ export class FakeD1 {
         return { changes: 1, first: null, results: [] };
       }
       if (
-        sql.startsWith("SELECT") &&
-        sql.includes("FROM pending_sends WHERE token = ?1")
+        sql.startsWith(
+          "DELETE FROM pending_sends WHERE token = ?1 AND client_id = ?2",
+        )
       ) {
-        const row = this.pending.get(values[0] as string) ?? null;
-        const first = row
+        // One statement, like D1: no gap between finding the row and removing it.
+        const row = this.pending.get(values[0] as string);
+        if (!row || row.client_id !== values[1])
+          return { changes: 0, first: null, results: [] };
+        this.pending.delete(row.token);
+        const first = sql.includes("RETURNING")
           ? {
               ...row,
               mime: row.mime.buffer.slice(
@@ -123,19 +128,7 @@ export class FakeD1 {
               ),
             }
           : null;
-        return { changes: 0, first, results: first ? [first] : [] };
-      }
-      if (
-        sql.startsWith(
-          "DELETE FROM pending_sends WHERE token = ?1 AND client_id = ?2",
-        )
-      ) {
-        const row = this.pending.get(values[0] as string);
-        if (row && row.client_id === values[1]) {
-          this.pending.delete(row.token);
-          return { changes: 1, first: null, results: [] };
-        }
-        return { changes: 0, first: null, results: [] };
+        return { changes: 1, first, results: first ? [first] : [] };
       }
       if (sql.startsWith("DELETE FROM pending_sends WHERE token = ?1")) {
         return {

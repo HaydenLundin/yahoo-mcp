@@ -4,12 +4,12 @@ import { z } from "zod";
 import { buildMessage } from "../../lib/compose";
 import { ToolError } from "../../lib/errors";
 import {
+  locked,
   resolveSpecialUse,
   withImap,
-  withMailbox,
   withSpecialUse,
 } from "../../lib/imap";
-import { parseHeaderBlock, splitMessageIds } from "../../lib/mime";
+import { replyThreading } from "../../lib/mime";
 import { DESTRUCTIVE_IDEMPOTENT, runTool, WRITE, type ToolDeps } from "../tool";
 
 const MAX_BODY = 200_000;
@@ -109,9 +109,8 @@ export function registerDraftTools(server: McpServer, deps: ToolDeps): void {
               args,
             );
             const folder = await resolveSpecialUse(client, "\\Drafts");
-            const lock = await client.getMailboxLock(folder);
-            try {
-              const existing = await client.fetchOne(
+            await locked(client, folder, async (c) => {
+              const existing = await c.fetchOne(
                 String(args.uid),
                 { uid: true },
                 { uid: true },
@@ -121,16 +120,16 @@ export function registerDraftTools(server: McpServer, deps: ToolDeps): void {
                   "NOT_FOUND",
                   `No draft with uid ${args.uid} in ${folder}`,
                 );
-            } finally {
-              lock.release();
-            }
+            });
             const uid = await appendDraft(client, folder, content);
-            const lock2 = await client.getMailboxLock(folder);
-            try {
-              await client.messageDelete(String(args.uid), { uid: true });
-            } finally {
-              lock2.release();
-            }
+            await locked(client, folder, async (c) => {
+              const ok = await c.messageDelete(String(args.uid), { uid: true });
+              if (!ok)
+                throw new ToolError(
+                  "IMAP_DELETE_FAILED",
+                  `Saved the new draft as uid ${uid} in ${folder}, but Yahoo did not delete the old draft ${args.uid}. Remove it with delete_draft.`,
+                );
+            });
             return { uid, folder, replaced_uid: args.uid };
           }),
       ),
@@ -181,32 +180,26 @@ async function composeDraft(
   from: string,
   args: DraftArgs,
 ): Promise<string> {
-  let inReplyTo: string | undefined;
-  let references: string[] | undefined;
-  if (args.in_reply_to_uid) {
-    const lock = await client.getMailboxLock(args.in_reply_to_folder);
-    try {
-      const original = await client.fetchOne(
-        String(args.in_reply_to_uid),
-        { uid: true, envelope: true, headers: ["message-id", "references"] },
-        { uid: true },
-      );
-      if (!original) {
-        throw new ToolError(
-          "NOT_FOUND",
-          `No message with uid ${args.in_reply_to_uid} in ${args.in_reply_to_folder}`,
+  const threading = args.in_reply_to_uid
+    ? await locked(client, args.in_reply_to_folder, async (c) => {
+        const original = await c.fetchOne(
+          String(args.in_reply_to_uid),
+          {
+            uid: true,
+            envelope: true,
+            headers: ["message-id", "references", "in-reply-to"],
+          },
+          { uid: true },
         );
-      }
-      const headers = parseHeaderBlock(original.headers);
-      const originalId = original.envelope?.messageId ?? headers["message-id"];
-      if (originalId) {
-        inReplyTo = originalId;
-        references = [...splitMessageIds(headers.references), originalId];
-      }
-    } finally {
-      lock.release();
-    }
-  }
+        if (!original) {
+          throw new ToolError(
+            "NOT_FOUND",
+            `No message with uid ${args.in_reply_to_uid} in ${args.in_reply_to_folder}`,
+          );
+        }
+        return replyThreading(original);
+      })
+    : {};
   return buildMessage({
     from,
     to: args.to,
@@ -215,8 +208,7 @@ async function composeDraft(
     subject: args.subject,
     text: args.body_text,
     html: args.body_html,
-    inReplyTo,
-    references,
+    ...threading,
   });
 }
 
@@ -239,6 +231,3 @@ async function appendDraft(
   }
   return result.uid;
 }
-
-/** Exported for tests and for the send tools in milestone 5. */
-export { withMailbox };

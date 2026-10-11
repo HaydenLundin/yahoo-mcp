@@ -37,7 +37,10 @@ export function parseAddress(input: string): Address {
       `Not a valid email address: ${input}`,
     );
   }
-  const name = m ? m[1].trim().replace(/^"(.*)"$/, "$1") : undefined;
+  // A quoted display name carries \" and \\ escapes; strip them here so output quoting does not double them.
+  const rawName = m ? m[1].trim() : undefined;
+  const quoted = rawName ? /^"(.*)"$/.exec(rawName) : null;
+  const name = quoted ? quoted[1].replace(/\\(.)/g, "$1") : rawName;
   return name ? { name, address } : { address };
 }
 
@@ -135,10 +138,15 @@ export function encodeHeaderText(text: string): string {
 
 function encodeWord(text: string): string {
   // 45 input bytes -> 60 base64 chars, keeping each encoded word under 76 characters.
+  // RFC 2047 section 5: a word holds whole characters, so never cut inside a multi-byte
+  // UTF-8 sequence (continuation bytes are 10xxxxxx).
   const bytes = Buffer.from(text, "utf8");
   const words: string[] = [];
-  for (let i = 0; i < bytes.length; i += 45) {
-    words.push(`=?UTF-8?B?${bytes.subarray(i, i + 45).toString("base64")}?=`);
+  for (let i = 0; i < bytes.length; ) {
+    let end = Math.min(i + 45, bytes.length);
+    while (end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--;
+    words.push(`=?UTF-8?B?${bytes.subarray(i, end).toString("base64")}?=`);
+    i = end;
   }
   return words.join(" ");
 }

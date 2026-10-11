@@ -8,12 +8,16 @@ import type {
 import { z } from "zod";
 import { buildMessage, parseAddress } from "../../lib/compose";
 import { ToolError } from "../../lib/errors";
-import { resolveSpecialUse, withImap, withMailbox } from "../../lib/imap";
+import {
+  resolveSpecialUse,
+  withImap,
+  withMailbox,
+  type ImapContext,
+} from "../../lib/imap";
 import {
   formatAddress,
   listAttachments,
-  parseHeaderBlock,
-  splitMessageIds,
+  replyThreading,
   toIsoDate,
 } from "../../lib/mime";
 import {
@@ -136,8 +140,6 @@ export function registerSendTools(server: McpServer, deps: ToolDeps): void {
                 "The original message has no address to reply to",
               );
 
-            const headers = parseHeaderBlock(original.headers);
-            const originalId = env.messageId ?? headers["message-id"];
             const subject = /^re:/i.test(env.subject ?? "")
               ? (env.subject as string)
               : `Re: ${env.subject ?? ""}`.trim();
@@ -148,10 +150,7 @@ export function registerSendTools(server: McpServer, deps: ToolDeps): void {
               subject,
               text: args.body_text,
               html: args.body_html,
-              inReplyTo: originalId,
-              references: originalId
-                ? [...splitMessageIds(headers.references), originalId]
-                : undefined,
+              ...replyThreading(original),
             });
             return stage(
               deps,
@@ -277,25 +276,17 @@ export function registerSendTools(server: McpServer, deps: ToolDeps): void {
           );
         }
         const { preview, mime } = taken.row;
-        const rcpts = [...preview.to, ...preview.cc, ...preview.bcc].map(
-          (a) => parseAddress(a).address,
-        );
-        const result = await sendRaw(deps.env, { from: self, to: rcpts }, mime);
-
-        // Yahoo does not file SMTP sends into Sent on its own.
-        let savedToSent = false;
-        try {
-          await withImap(ctx, async (client) => {
-            const sent = await resolveSpecialUse(client, "\\Sent");
-            const appended = await client.append(sent, mime, ["\\Seen"]);
-            savedToSent = Boolean(appended);
-          });
-        } catch (err) {
-          console.warn(
-            "sent but could not file a copy in Sent",
-            err instanceof Error ? err.message : err,
-          );
+        // One RCPT TO per mailbox, however many header fields name it; first spelling wins.
+        const byMailbox = new Map<string, string>();
+        for (const a of [...preview.to, ...preview.cc, ...preview.bcc]) {
+          const addr = parseAddress(a).address;
+          const key = addr.toLowerCase();
+          if (!byMailbox.has(key)) byMailbox.set(key, addr);
         }
+        const rcpts = [...byMailbox.values()];
+        const result = await sendRaw(deps.env, { from: self, to: rcpts }, mime);
+        // Yahoo does not file SMTP sends into Sent on its own.
+        const savedToSent = await fileCopyInSent(ctx, mime);
         return {
           sent: true,
           kind: preview.kind,
@@ -352,6 +343,27 @@ async function stage(
   };
 }
 
+/**
+ * Best effort by design: by the time this runs the message has left the mailbox, so a
+ * failure to file the copy must not turn a successful send into an error. This is the one
+ * sanctioned place a tool swallows an IMAP error (CLAUDE.md, project context); the outcome
+ * reaches the client as saved_to_sent.
+ */
+async function fileCopyInSent(ctx: ImapContext, mime: string): Promise<boolean> {
+  try {
+    return await withImap(ctx, async (client) => {
+      const sent = await resolveSpecialUse(client, "\\Sent");
+      return Boolean(await client.append(sent, mime, ["\\Seen"]));
+    });
+  } catch (err) {
+    console.warn(
+      "sent but could not file a copy in Sent",
+      err instanceof Error ? err.message : err,
+    );
+    return false;
+  }
+}
+
 async function fetchOriginal(
   client: ImapFlow,
   uid: number,
@@ -364,7 +376,7 @@ async function fetchOriginal(
       uid: true,
       envelope: true,
       bodyStructure: withStructure,
-      headers: ["message-id", "references"],
+      headers: ["message-id", "references", "in-reply-to"],
     },
     { uid: true },
   );

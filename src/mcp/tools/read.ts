@@ -6,7 +6,7 @@ import type {
   SearchObject,
 } from "imapflow";
 import { z } from "zod";
-import { ToolError } from "../../lib/errors";
+import { normalizeError, ToolError } from "../../lib/errors";
 import {
   downloadText,
   pagedSearch,
@@ -256,11 +256,14 @@ export function registerReadTools(server: McpServer, deps: ToolDeps): void {
 
             const { uids, threadId, method } = await threadUids(client, target);
             const capped = uids.length > PAGE_MAX;
-            const summaries = await fetchSummaries(
-              client,
-              capped ? uids.slice(-PAGE_MAX) : uids,
-              args.folder,
-            );
+            const windowUids = capped
+              ? windowAround(uids, target.uid, PAGE_MAX)
+              : uids;
+            const fetched = await fetchMessages(client, windowUids);
+            const summaries = windowUids.flatMap((uid) => {
+              const m = fetched.get(uid);
+              return m ? [toSummary(m, args.folder)] : [];
+            });
             summaries.sort(
               (a, b) =>
                 (a.date ?? "").localeCompare(b.date ?? "") || a.uid - b.uid,
@@ -271,11 +274,8 @@ export function registerReadTools(server: McpServer, deps: ToolDeps): void {
             > = summaries;
             if (args.include_bodies) {
               for (const m of messages.slice(0, THREAD_BODY_MAX)) {
-                const full = await client.fetchOne(
-                  String(m.uid),
-                  { uid: true, bodyStructure: true },
-                  { uid: true },
-                );
+                // fetchMessages already brought the BODYSTRUCTURE readBody needs.
+                const full = fetched.get(m.uid);
                 if (!full) continue;
                 const body = await readBody(
                   client,
@@ -291,6 +291,7 @@ export function registerReadTools(server: McpServer, deps: ToolDeps): void {
               folder: args.folder,
               thread_id: threadId,
               matched_by: method,
+              thread_size: uids.length,
               truncated: capped,
               messages,
             };
@@ -369,14 +370,22 @@ function parseDate(value: string, field: string): Date {
   return d;
 }
 
+/** One FETCH for everything a summary (and readBody) needs, keyed by uid; uids gone meanwhile are absent. */
+export async function fetchMessages(
+  client: ImapFlow,
+  uids: number[],
+): Promise<Map<number, FetchMessageObject>> {
+  if (uids.length === 0) return new Map();
+  const fetched = await client.fetchAll(uids, SUMMARY_QUERY, { uid: true });
+  return new Map(fetched.map((m) => [m.uid, m]));
+}
+
 export async function fetchSummaries(
   client: ImapFlow,
   uids: number[],
   folder: string,
 ): Promise<MessageSummary[]> {
-  if (uids.length === 0) return [];
-  const fetched = await client.fetchAll(uids, SUMMARY_QUERY, { uid: true });
-  const byUid = new Map(fetched.map((m) => [m.uid, m]));
+  const byUid = await fetchMessages(client, uids);
   return uids.flatMap((uid) => {
     const m = byUid.get(uid);
     return m ? [toSummary(m, folder)] : [];
@@ -485,8 +494,13 @@ async function threadUids(
           method: "thread_id",
         };
       }
-    } catch {
-      // Server rejected THREADID search; use the header chain below.
+    } catch (err) {
+      // Only a rejected THREADID key falls back to the header chain. A dead or throttled
+      // connection would fail the fallback too, and more confusingly, so it surfaces as is.
+      const e = normalizeError(err);
+      if (["IMAP_RATE_LIMITED", "IMAP_CONNECT_FAILED", "IMAP_AUTH_FAILED"].includes(e.code)) {
+        throw e;
+      }
     }
   }
 
@@ -513,6 +527,16 @@ async function threadUids(
     threadId: null,
     method: "references",
   };
+}
+
+/** `size` uids that always include `target`: the newest ones when the target is recent, else a window around it. */
+function windowAround(uids: number[], target: number, size: number): number[] {
+  const idx = Math.max(0, uids.indexOf(target));
+  const start = Math.min(
+    Math.max(0, idx - Math.floor(size / 2)),
+    uids.length - size,
+  );
+  return uids.slice(start, start + size);
 }
 
 function withTarget(uids: number[], target: number): number[] {

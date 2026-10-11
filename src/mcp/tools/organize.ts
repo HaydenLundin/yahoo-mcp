@@ -3,6 +3,7 @@ import type { ImapFlow } from "imapflow";
 import { z } from "zod";
 import { ToolError } from "../../lib/errors";
 import {
+  locked,
   resolveSpecialUse,
   withImap,
   withMailbox,
@@ -117,6 +118,20 @@ export function registerOrganizeTools(server: McpServer, deps: ToolDeps): void {
           { name, kind: "write", args, uids: args.uids },
           async () =>
             withMailbox(ctx, args.folder, async (client) => {
+              // STORE reports nothing per uid, so ask first which of them still exist.
+              const present = new Set(
+                (
+                  await client.fetchAll(args.uids, { uid: true }, { uid: true })
+                ).map((m) => m.uid),
+              );
+              const result = {
+                updated: present.size,
+                missing: args.uids.filter((u) => !present.has(u)),
+                folder: args.folder,
+                flag,
+                set: add,
+              };
+              if (present.size === 0) return result;
               const ok = add
                 ? await client.messageFlagsAdd(args.uids, [flag], { uid: true })
                 : await client.messageFlagsRemove(args.uids, [flag], {
@@ -127,12 +142,7 @@ export function registerOrganizeTools(server: McpServer, deps: ToolDeps): void {
                   "IMAP_STORE_FAILED",
                   `Yahoo rejected the flag change in ${args.folder}`,
                 );
-              return {
-                updated: args.uids.length,
-                folder: args.folder,
-                flag,
-                set: add,
-              };
+              return result;
             }),
         ),
     );
@@ -181,15 +191,13 @@ async function moveToSpecialUse(
         from_folder: fromFolder,
         to_folder: destination,
         uid_map: {},
+        missing: [],
         note: "already there",
       };
     }
-    const lock = await client.getMailboxLock(fromFolder);
-    try {
-      return await moveUids(client, uids, fromFolder, destination);
-    } finally {
-      lock.release();
-    }
+    return locked(client, fromFolder, (c) =>
+      moveUids(c, uids, fromFolder, destination),
+    );
   });
 }
 
@@ -208,8 +216,14 @@ async function moveUids(
   const uidMap: Record<string, number> = {};
   for (const [from, to] of result.uidMap ?? new Map<number, number>())
     uidMap[String(from)] = to;
+  // COPYUID names the uids that actually moved; without it (no UIDPLUS) the request is all we know.
+  const moved = result.uidMap ? result.uidMap.size : uids.length;
+  const missing = result.uidMap
+    ? uids.filter((u) => !result.uidMap?.has(u))
+    : [];
   return {
-    moved: uids.length,
+    moved,
+    missing,
     from_folder: fromFolder,
     to_folder: toFolder,
     uid_map: uidMap,

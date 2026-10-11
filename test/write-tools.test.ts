@@ -300,6 +300,7 @@ describe("flags", () => {
     const { data } = await h.call("mark_unread", { uids: [101] });
     expect(data).toEqual({
       updated: 1,
+      missing: [],
       folder: "INBOX",
       flag: "\\Seen",
       set: false,
@@ -318,5 +319,36 @@ describe("flags", () => {
       tool: "unflag_messages",
       uids: "[101,103]",
     });
+  });
+});
+
+describe("counts reflect the server, not the request", () => {
+  it("move reports only the uids COPYUID confirms and names the rest", async () => {
+    const { data } = await h.call("move_messages", {
+      uids: [101, 999],
+      to_folder: "Archive",
+    });
+    expect(data).toMatchObject({ moved: 1, missing: [999], uid_map: { "101": 106 } });
+  });
+
+  it("flag changes count only messages that exist", async () => {
+    const { data } = await h.call("mark_read", { uids: [102, 999] });
+    expect(data).toMatchObject({ updated: 1, missing: [999] });
+    const none = await h.call("mark_read", { uids: [998, 999] });
+    expect(none.data).toMatchObject({ updated: 0, missing: [998, 999] });
+    expect(FakeImapFlow.calls.filter((c) => c.startsWith("flags:"))).toHaveLength(1);
+  });
+
+  it("update_draft fails loudly when the old draft cannot be removed", async () => {
+    FakeImapFlow.failDelete = true;
+    const { raw, data } = await h.call("update_draft", {
+      uid: 7,
+      to: ["sam@example.com"],
+      subject: "v3",
+      body_text: "v3",
+    });
+    expect(raw.isError).toBe(true);
+    expect(String(data)).toMatch(/^IMAP_DELETE_FAILED: Saved the new draft as uid \d+/);
+    expect(uidsIn("Draft")).toContain(7);
   });
 });

@@ -145,3 +145,33 @@ describe("buildMessage", () => {
     );
   });
 });
+
+describe("header encoding keeps whole characters", () => {
+  it("never splits a multi-byte character across RFC 2047 encoded words", () => {
+    const text = "é".repeat(40) + "日本語テキスト" + "😀".repeat(5);
+    const words = encodeHeaderText(text).split(" ");
+    expect(words.length).toBeGreaterThan(1);
+    const decoded = words.map((w) => {
+      const m = /^=\?UTF-8\?B\?([A-Za-z0-9+/=]+)\?=$/.exec(w);
+      expect(m, w).not.toBeNull();
+      return Buffer.from(m![1], "base64").toString("utf8");
+    });
+    for (const piece of decoded) expect(piece).not.toContain("\uFFFD");
+    expect(decoded.join("")).toBe(text);
+  });
+
+  it("unescapes a quoted display name once and re-escapes it once", () => {
+    expect(parseAddress('"Doe, John \\"JD\\"" <j@e.example>')).toEqual({
+      name: 'Doe, John "JD"',
+      address: "j@e.example",
+    });
+    const raw = buildMessage({
+      from: "me@yahoo.com",
+      to: ['"Doe, John \\"JD\\"" <j@e.example>'],
+      subject: "x",
+      text: "hi",
+    });
+    const to = raw.split("\r\n").find((l) => l.startsWith("To:"));
+    expect(to).toBe('To: "Doe, John \\"JD\\"" <j@e.example>');
+  });
+});

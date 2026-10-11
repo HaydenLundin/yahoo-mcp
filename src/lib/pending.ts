@@ -58,12 +58,13 @@ export async function createPending(
 
 export type TakeResult =
   | { status: "ok"; row: PendingRow }
-  | { status: "missing" | "expired" | "wrong_client" };
+  | { status: "missing" | "expired" };
 
 /**
- * Consume a token. Single use: a valid row is deleted before it is returned, so a retried
- * confirm_send can never send twice. A row belonging to another client is left untouched
- * and reported as wrong_client; callers surface that as an ordinary invalid token.
+ * Consume a token. Single use: the row is removed and read in one statement, so two
+ * overlapping confirm_send calls can never both see it and send twice. A row that belongs to
+ * another client does not match the WHERE clause and is left untouched; the caller sees the
+ * same "missing" as for an unknown token.
  */
 export async function takePending(
   env: Env,
@@ -71,15 +72,11 @@ export async function takePending(
   clientId: string,
 ): Promise<TakeResult> {
   const raw = await env.DB.prepare(
-    "SELECT token, client_id, kind, preview, mime, created_at, expires_at FROM pending_sends WHERE token = ?1",
+    "DELETE FROM pending_sends WHERE token = ?1 AND client_id = ?2 RETURNING token, client_id, kind, preview, mime, created_at, expires_at",
   )
-    .bind(token)
+    .bind(token, clientId)
     .first<RawRow>();
   if (!raw) return { status: "missing" };
-  if (raw.client_id !== clientId) return { status: "wrong_client" };
-  await env.DB.prepare("DELETE FROM pending_sends WHERE token = ?1")
-    .bind(token)
-    .run();
   if (raw.expires_at < Date.now()) return { status: "expired" };
   return { status: "ok", row: toRow(raw) };
 }

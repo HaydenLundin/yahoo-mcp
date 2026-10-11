@@ -369,3 +369,37 @@ describe("forward_message", () => {
     expect((data as Staged).preview.subject).toBe("Fwd: already");
   });
 });
+
+describe("confirm_send envelope and atomicity", () => {
+  it("sends one RCPT TO per mailbox even when To and Cc both name it", async () => {
+    const { data } = await h.call("send_message", {
+      to: ["sam@example.com"],
+      cc: ["Sam <SAM@example.com>"],
+      subject: "Dup",
+      body_text: "Body",
+    });
+    const s = data as Staged;
+    const confirmed = await h.call("confirm_send", {
+      confirm_token: s.confirm_token,
+    });
+    expect(confirmed.data).toMatchObject({ sent: true, accepted: 1 });
+    expect(FakeSmtp.sent[0].envelope.to).toEqual(["sam@example.com"]);
+  });
+
+  it("consumes a token atomically: two overlapping confirms send exactly once", async () => {
+    const { data } = await h.call("send_message", {
+      to: ["sam@example.com"],
+      subject: "Once",
+      body_text: "Body",
+    });
+    const s = data as Staged;
+    const [a, b] = await Promise.all([
+      h.call("confirm_send", { confirm_token: s.confirm_token }),
+      h.call("confirm_send", { confirm_token: s.confirm_token }),
+    ]);
+    expect([a, b].filter((r) => !r.raw.isError)).toHaveLength(1);
+    const failed = [a, b].find((r) => r.raw.isError)!;
+    expect(String(failed.data).startsWith("CONFIRM_TOKEN_INVALID:")).toBe(true);
+    expect(FakeSmtp.sent).toHaveLength(1);
+  });
+});

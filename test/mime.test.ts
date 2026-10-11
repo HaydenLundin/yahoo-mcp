@@ -5,9 +5,11 @@ import {
   decodeEntities,
   decodeTransfer,
   formatAddress,
+  formatAddresses,
   htmlToText,
   listAttachments,
   parseHeaderBlock,
+  replyThreading,
   selectBodyParts,
   splitMessageIds,
   truncateText,
@@ -186,5 +188,44 @@ describe("formatAddress", () => {
     expect(
       formatAddress({ name: "pat@x.example", address: "pat@x.example" }),
     ).toBe("pat@x.example");
+  });
+});
+
+describe("formatAddress without a mailbox", () => {
+  it("returns an empty string for group syntax so callers drop it", () => {
+    expect(formatAddress({ name: "undisclosed-recipients" })).toBe("");
+    expect(
+      formatAddresses([
+        { name: "undisclosed-recipients" },
+        { address: "a@x.example" },
+      ]),
+    ).toEqual(["a@x.example"]);
+  });
+});
+
+describe("replyThreading", () => {
+  it("appends the parent's id to its References chain", () => {
+    expect(
+      replyThreading({
+        envelope: { messageId: "<c@x>" },
+        headers: "References: <a@x> <b@x>\r\n",
+      }),
+    ).toEqual({ inReplyTo: "<c@x>", references: ["<a@x>", "<b@x>", "<c@x>"] });
+  });
+
+  it("starts the chain from the parent's In-Reply-To when it has no References", () => {
+    expect(
+      replyThreading({
+        envelope: { messageId: "<c@x>" },
+        headers: "In-Reply-To: <b@x>\r\n",
+      }),
+    ).toEqual({ inReplyTo: "<c@x>", references: ["<b@x>", "<c@x>"] });
+  });
+
+  it("falls back to the raw Message-ID header and yields nothing without an id", () => {
+    expect(
+      replyThreading({ envelope: {}, headers: "Message-ID: <m@x>\r\n" }),
+    ).toEqual({ inReplyTo: "<m@x>", references: ["<m@x>"] });
+    expect(replyThreading({ envelope: {}, headers: "" })).toEqual({});
   });
 });
