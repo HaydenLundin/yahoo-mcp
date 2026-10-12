@@ -56,7 +56,12 @@ async function toolNames(
 ): Promise<string[]> {
   FakeImapFlow.reset(yahooFolders());
   h = await startHarness(env, grant(scopes));
-  const { tools } = await h.client.listTools();
+  // A grant that earns no tools has no tools capability, and the SDK answers tools/list with
+  // Method not found; treat that as an empty list.
+  const { tools } = await h.client.listTools().catch((e: unknown) => {
+    if (/Method not found/.test(String(e))) return { tools: [] };
+    throw e;
+  });
   return tools.map((t) => t.name).sort();
 }
 
@@ -86,7 +91,8 @@ describe("the tool list follows the grant's scopes", () => {
     );
   });
 
-  it("send tools need both the mail.send scope and SEND_ENABLED", async () => {
+  it("send tools need mail.send, mail.read, and SEND_ENABLED", async () => {
+    expect(await toolNames(["mail.send"], { SEND_ENABLED: "true" })).toEqual([]);
     expect(await toolNames(["mail.read", "mail.send"])).toEqual(READ_TOOLS);
     expect(
       await toolNames(["mail.read", "mail.send"], { SEND_ENABLED: "true" }),

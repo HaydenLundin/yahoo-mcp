@@ -26,7 +26,7 @@ const uidsIn = (path: string) =>
 const lastAudit = () => h.db.rows.at(-1)!;
 
 describe("tools/list annotations", () => {
-  it("marks organize tools idempotent, drafts non-idempotent, delete_draft destructive", async () => {
+  it("marks organize tools idempotent, drafts non-idempotent, delete_draft a reversible move", async () => {
     const { tools } = await h.client.listTools();
     const by = Object.fromEntries(tools.map((t) => [t.name, t.annotations]));
     expect(Object.keys(by).sort()).toEqual(
@@ -73,7 +73,7 @@ describe("tools/list annotations", () => {
     });
     expect(by.update_draft).toMatchObject({ idempotentHint: false });
     expect(by.delete_draft).toMatchObject({
-      destructiveHint: true,
+      destructiveHint: false,
       idempotentHint: true,
     });
     expect(tools.some((t) => t.name.includes("send"))).toBe(false);
@@ -172,16 +172,23 @@ describe("update_draft and delete_draft", () => {
       subject: "Draft to Sam, v2",
       body_text: "v2",
     });
-    expect(data).toMatchObject({ uid: 10, folder: "Draft", replaced_uid: 7 });
+    expect(data).toMatchObject({
+      uid: 10,
+      folder: "Draft",
+      replaced_uid: 7,
+      old_version_in: "Trash",
+    });
     expect(uidsIn("Draft")).toEqual([9, 10]);
+    expect(uidsIn("Trash")).toEqual([1]);
     const appendAt = FakeImapFlow.calls.findIndex((c) =>
       c.startsWith("append:Draft:10"),
     );
-    const deleteAt = FakeImapFlow.calls.findIndex(
-      (c) => c === "delete:Draft:7",
+    const moveAt = FakeImapFlow.calls.findIndex(
+      (c) => c === "move:Draft->Trash:7",
     );
     expect(appendAt).toBeGreaterThan(-1);
-    expect(deleteAt).toBeGreaterThan(appendAt);
+    expect(moveAt).toBeGreaterThan(appendAt);
+    expect(FakeImapFlow.calls.some((c) => c.startsWith("delete:"))).toBe(false);
     expect(lastAudit()).toMatchObject({
       tool: "update_draft",
       uids: "[7]",
@@ -201,10 +208,18 @@ describe("update_draft and delete_draft", () => {
     expect(uidsIn("Draft")).toEqual([7, 9]);
   });
 
-  it("deletes a draft permanently and reports NOT_FOUND for unknown uids", async () => {
+  it("moves a draft to Trash, never expunging, and reports NOT_FOUND for unknown uids", async () => {
     const { data } = await h.call("delete_draft", { uid: 9 });
-    expect(data).toEqual({ deleted: true, uid: 9, folder: "Draft" });
+    expect(data).toEqual({
+      trashed: true,
+      uid: 9,
+      folder: "Draft",
+      trash_folder: "Trash",
+      trash_uid: 1,
+    });
     expect(uidsIn("Draft")).toEqual([7]);
+    expect(uidsIn("Trash")).toEqual([1]);
+    expect(FakeImapFlow.calls.some((c) => c.startsWith("delete:"))).toBe(false);
     expect(lastAudit()).toMatchObject({ tool: "delete_draft", uids: "[9]" });
 
     const r = await h.call("delete_draft", { uid: 9 });
@@ -339,8 +354,8 @@ describe("counts reflect the server, not the request", () => {
     expect(FakeImapFlow.calls.filter((c) => c.startsWith("flags:"))).toHaveLength(1);
   });
 
-  it("update_draft fails loudly when the old draft cannot be removed", async () => {
-    FakeImapFlow.failDelete = true;
+  it("update_draft fails loudly when the old draft cannot be moved to Trash", async () => {
+    FakeImapFlow.failMove = true;
     const { raw, data } = await h.call("update_draft", {
       uid: 7,
       to: ["sam@example.com"],
@@ -348,7 +363,24 @@ describe("counts reflect the server, not the request", () => {
       body_text: "v3",
     });
     expect(raw.isError).toBe(true);
-    expect(String(data)).toMatch(/^IMAP_DELETE_FAILED: Saved the new draft as uid \d+/);
+    expect(String(data)).toMatch(/^IMAP_MOVE_FAILED: Saved the new draft as uid \d+/);
     expect(uidsIn("Draft")).toContain(7);
+  });
+});
+
+describe("mail moved into Drafts cannot be lost through the draft tools", () => {
+  it("delete_draft on a message that merely sits in Drafts moves it to Trash; nothing is ever expunged", async () => {
+    const moved = await h.call("move_messages", { uids: [101], to_folder: "Draft" });
+    const newUid = (moved.data as { uid_map: Record<string, number> }).uid_map["101"];
+    expect(newUid).toBeGreaterThan(0);
+
+    const del = await h.call("delete_draft", { uid: newUid });
+    expect(del.raw.isError).toBeFalsy();
+    const trashUid = (del.data as { trash_uid: number }).trash_uid;
+    expect(uidsIn("Draft")).not.toContain(newUid);
+    expect(uidsIn("Trash")).toContain(trashUid);
+    const survivor = FakeImapFlow.folder("Trash").messages.find((m) => m.uid === trashUid);
+    expect(survivor?.envelope.subject).toBe("Lease renewal");
+    expect(FakeImapFlow.calls.some((c) => c.startsWith("delete:"))).toBe(false);
   });
 });

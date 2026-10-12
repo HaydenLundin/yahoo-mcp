@@ -1,6 +1,6 @@
 {
   "name": "yahoo-mcp",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0-rc.2",
   "private": true,
   "type": "module",
   "description": "Remote MCP server exposing a Yahoo Mail account to AI clients with Gmail-connector-parity permissions.",
@@ -18,21 +18,21 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@cloudflare/workers-oauth-provider": "^0.10.3",
+    "@cloudflare/workers-oauth-provider": "^0.10.4",
     "@hono/mcp": "^0.3.2",
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "hono": "^4.13.7",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "hono": "^4.13.13",
     "iconv-lite": "^0.7.3",
-    "imapflow": "^2.2.10",
+    "imapflow": "^2.4.0",
     "jose": "^6.2.12",
-    "zod": "^4.6.0"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260908.1",
-    "@types/node": "^26.5.0",
+    "@cloudflare/workers-types": "^5.20261011.1",
+    "@types/node": "^26.6.5",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3",
-    "wrangler": "^4.130.0"
+    "wrangler": "^4.149.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

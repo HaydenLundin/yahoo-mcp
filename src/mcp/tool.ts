@@ -21,7 +21,7 @@ export const READ_ONLY: ToolAnnotations = {
   openWorldHint: false,
 };
 
-/** Organize tools: move, archive, trash, flags. Repeating them changes nothing further. */
+/** Organize and delete_draft: moves and flags. Nothing is expunged, so repeating them changes nothing further. */
 export const WRITE_IDEMPOTENT: ToolAnnotations = {
   readOnlyHint: false,
   destructiveHint: false,
@@ -34,14 +34,6 @@ export const WRITE: ToolAnnotations = {
   readOnlyHint: false,
   destructiveHint: false,
   idempotentHint: false,
-  openWorldHint: false,
-};
-
-/** delete_draft: the one expunge in the system. */
-export const DESTRUCTIVE_IDEMPOTENT: ToolAnnotations = {
-  readOnlyHint: false,
-  destructiveHint: true,
-  idempotentHint: true,
   openWorldHint: false,
 };
 

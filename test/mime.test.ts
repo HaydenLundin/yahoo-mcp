@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { MessageStructureObject } from "imapflow";
 import {
   decodeBody,
   decodeCharset,
@@ -227,5 +228,44 @@ describe("replyThreading", () => {
       replyThreading({ envelope: {}, headers: "Message-ID: <m@x>\r\n" }),
     ).toEqual({ inReplyTo: "<m@x>", references: ["<m@x>"] });
     expect(replyThreading({ envelope: {}, headers: "" })).toEqual({});
+  });
+});
+
+describe("an attached message is an attachment, not a body source", () => {
+  const outerHtml = {
+    part: "1",
+    type: "text/html",
+    encoding: "quoted-printable",
+    size: 300,
+    parameters: { charset: "utf-8" },
+  };
+  const attachedMessage = {
+    part: "2",
+    type: "message/rfc822",
+    disposition: "attachment",
+    dispositionParameters: { filename: "fwd.eml" },
+    size: 4_000,
+    childNodes: [
+      { part: "2.1", type: "text/plain", encoding: "7bit", size: 100, parameters: { charset: "utf-8" } },
+      { part: "2.2", type: "text/html", encoding: "7bit", size: 200, parameters: { charset: "utf-8" } },
+    ],
+  };
+  const root = { type: "multipart/mixed", childNodes: [outerHtml, attachedMessage] } as unknown as MessageStructureObject;
+
+  it("never descends into the attached message for the body", () => {
+    const parts = selectBodyParts(root);
+    expect(parts.text).toBeUndefined();
+    expect(parts.html).toMatchObject({ id: "1", mime: "text/html" });
+  });
+
+  it("lists the attached message with its filename, or message.eml", () => {
+    expect(listAttachments(root)).toEqual([
+      { filename: "fwd.eml", mime: "message/rfc822", size: 4_000 },
+    ]);
+    const unnamed = {
+      type: "multipart/mixed",
+      childNodes: [outerHtml, { ...attachedMessage, disposition: undefined, dispositionParameters: undefined }],
+    } as unknown as MessageStructureObject;
+    expect(listAttachments(unnamed)[0]).toMatchObject({ filename: "message.eml" });
   });
 });

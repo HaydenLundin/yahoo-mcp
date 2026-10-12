@@ -193,18 +193,25 @@ export async function locked<T>(
  * Such a window is requested once more, then the call fails with IMAP_FETCH_INCOMPLETE rather
  * than returning a silently cut body.
  */
+export interface DownloadedText {
+  text: string;
+  /** False when maxBytes stopped the fetch before the part ended: the text is a prefix. */
+  complete: boolean;
+}
+
 export async function downloadText(
   client: ImapFlow,
   uid: number,
   part: BodyPart,
   maxBytes: number,
-): Promise<string> {
+): Promise<DownloadedText> {
   const key = part.id.toLowerCase();
   const chunks: Uint8Array[] = [];
   let received = 0;
   // How much the server owes us before maxBytes stops the loop; null when the size is unknown.
   const owed = part.size === undefined ? null : Math.min(part.size, maxBytes);
   let retriedAt = -1;
+  let endedByServer = false;
   while (received < maxBytes) {
     const msg = await client.fetchOne(
       String(uid),
@@ -231,16 +238,21 @@ export async function downloadText(
       chunks.push(chunk);
       received += got;
     }
-    if (short) break;
+    if (short) {
+      endedByServer = true;
+      break;
+    }
   }
-  if (received === 0) return "";
+  const complete =
+    part.size !== undefined ? received >= part.size : endedByServer;
+  if (received === 0) return { text: "", complete };
   const raw = new Uint8Array(received);
   let offset = 0;
   for (const c of chunks) {
     raw.set(c, offset);
     offset += c.length;
   }
-  return decodeBody(raw, part);
+  return { text: decodeBody(raw, part), complete };
 }
 
 export interface PagedSearch {

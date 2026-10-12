@@ -51,9 +51,10 @@ export type Scope = (typeof SCOPES)[number];
 export const SCOPE_TEXT: Record<Scope, string> = {
   "mail.read":
     "Search and read messages, threads, folders, and attachment names (never attachment contents)",
-  "mail.draft": "Create, edit, and delete drafts",
+  "mail.draft":
+    "Create, edit, and delete drafts (a deleted draft goes to Trash, never expunged)",
   "mail.organize":
     "Move, archive, trash, flag, and mark messages read or unread (never permanent delete)",
   "mail.send":
-    "Send, reply, and forward, with a preview you must confirm before anything leaves the mailbox",
+    "Send, reply, and forward: each prepares a preview and a single-use token, and your client asks you before confirm_send runs. Also needs mail.read",
 };

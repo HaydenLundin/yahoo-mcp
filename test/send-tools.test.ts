@@ -165,10 +165,16 @@ describe("confirm_send and cancel_send (phase two)", () => {
     });
     expect(FakeSmtp.sent[0].raw).toContain("Subject: Hello\r\n");
 
+    // The Bcc recipient is in RCPT TO (asserted above) but the header never crosses the wire;
+    // the Sent copy keeps it so the sender can see who was blind-copied.
+    expect(FakeSmtp.sent[0].raw).not.toMatch(/^bcc:/im);
     const sent = FakeImapFlow.folder("Sent").messages;
     expect(sent).toHaveLength(1);
     expect(sent[0].flags).toEqual(["\\Seen"]);
-    expect(sent[0].raw).toBe(FakeSmtp.sent[0].raw);
+    expect(sent[0].raw).toContain("Bcc: hidden@example.com\r\n");
+    expect((sent[0].raw ?? "").replace(/^Bcc:[^\r]*\r\n/im, "")).toBe(
+      FakeSmtp.sent[0].raw,
+    );
 
     expect(h.db.pending.size).toBe(0);
     const again = await h.call("confirm_send", {
@@ -401,5 +407,20 @@ describe("confirm_send envelope and atomicity", () => {
     const failed = [a, b].find((r) => r.raw.isError)!;
     expect(String(failed.data).startsWith("CONFIRM_TOKEN_INVALID:")).toBe(true);
     expect(FakeSmtp.sent).toHaveLength(1);
+  });
+});
+
+describe("the preview shows what recipients will see", () => {
+  it("carries body_html when the message has an HTML alternative", async () => {
+    const { data } = await h.call("send_message", {
+      to: ["sam@example.com"],
+      subject: "Rich",
+      body_text: "plain",
+      body_html: "<p>rich</p>",
+    });
+    const s = data as Staged;
+    expect(s.preview.body_html).toBe("<p>rich</p>");
+    const row = h.db.pending.get(s.confirm_token)!;
+    expect(JSON.parse(row.preview).body_html).toBe("<p>rich</p>");
   });
 });

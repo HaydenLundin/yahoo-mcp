@@ -113,6 +113,29 @@ export function buildMessage(input: MessageInput): string {
   return `${head}\r\n\r\n${body.join("\r\n")}\r\n`;
 }
 
+/**
+ * The copy handed to SMTP must not carry Bcc (RFC 5322 section 3.6.3): the Bcc recipients are
+ * named in RCPT TO and must stay invisible to everyone else. The draft and the Sent copy keep
+ * the header so the sender can see who was blind-copied.
+ */
+export function withoutBcc(raw: string): string {
+  const end = raw.indexOf("\r\n\r\n");
+  const head = end === -1 ? raw : raw.slice(0, end);
+  const body = end === -1 ? "" : raw.slice(end);
+  const kept: string[] = [];
+  let dropping = false;
+  for (const line of head.split("\r\n")) {
+    if (/^bcc:/i.test(line)) {
+      dropping = true;
+      continue;
+    }
+    if (dropping && /^[ \t]/.test(line)) continue; // folded continuation of the Bcc line
+    dropping = false;
+    kept.push(line);
+  }
+  return kept.join("\r\n") + body;
+}
+
 export function formatAddressList(list: Address[]): string {
   return list
     .map((a) => {

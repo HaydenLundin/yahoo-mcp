@@ -260,7 +260,8 @@ if (alias.data.results.length) {
   log(`fetch alias ok in ${fetched.ms} ms: text ${fetched.data.text.length} chars, ${fetched.data.metadata.attachments.length} attachment name(s)`);
 }
 
-// 5c. Write tools, self-cleaning: a draft is created, updated, listed, and deleted; the newest
+// 5c. Write tools: a draft is created, updated, listed, and deleted (both the superseded version and
+// the final one end up in Trash, since nothing expunges); the newest
 // message gets flagged and unflagged and its read state toggled and restored. Nothing is moved.
 const stamp = `yahoo-mcp e2e ${new Date().toISOString()}`;
 const created = await tool("create_draft", { to: ["e2e@example.com"], subject: stamp, body_text: "Draft written by the e2e test. Safe to delete." });
@@ -277,8 +278,8 @@ if (listed.data.messages.some((m) => m.uid === created.data.uid)) fail("old draf
 log(`list_drafts ok in ${listed.ms} ms: new draft present, old one gone`);
 
 const deleted = await tool("delete_draft", { uid: updated.data.uid });
-if (deleted.data.deleted !== true) fail("delete_draft shape");
-log(`delete_draft ok in ${deleted.ms} ms`);
+if (deleted.data.trashed !== true || typeof deleted.data.trash_folder !== "string") fail("delete_draft shape");
+log(`delete_draft ok in ${deleted.ms} ms: moved to ${deleted.data.trash_folder}`);
 
 if (search.data.messages.length) {
   const target = search.data.messages[0];

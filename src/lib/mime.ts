@@ -73,6 +73,12 @@ function walkLeaves(
   node: MessageStructureObject,
   visit: (leaf: MessageStructureObject) => void,
 ): void {
+  // An attached message (message/rfc822) is a leaf here: its inner parts belong to another
+  // message and must never be served as this one's body or hidden from the attachment list.
+  if (node.type.toLowerCase() === "message/rfc822") {
+    visit(node);
+    return;
+  }
   if (node.childNodes && node.childNodes.length > 0) {
     for (const child of node.childNodes) walkLeaves(child, visit);
     return;

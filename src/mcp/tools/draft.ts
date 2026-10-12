@@ -3,14 +3,9 @@ import type { ImapFlow } from "imapflow";
 import { z } from "zod";
 import { buildMessage } from "../../lib/compose";
 import { ToolError } from "../../lib/errors";
-import {
-  locked,
-  resolveSpecialUse,
-  withImap,
-  withSpecialUse,
-} from "../../lib/imap";
+import { locked, resolveSpecialUse, withImap } from "../../lib/imap";
 import { replyThreading } from "../../lib/mime";
-import { DESTRUCTIVE_IDEMPOTENT, runTool, WRITE, type ToolDeps } from "../tool";
+import { runTool, WRITE, WRITE_IDEMPOTENT, type ToolDeps } from "../tool";
 
 const MAX_BODY = 200_000;
 
@@ -55,7 +50,10 @@ type DraftArgs = {
   in_reply_to_folder: string;
 };
 
-/** `mail.draft` tools (ARCHITECTURE.md section 5.2). Drafts live in Yahoo's Drafts folder, found by special-use flag. */
+/**
+ * `mail.draft` tools (ARCHITECTURE.md section 5.2). Drafts live in Yahoo's Drafts folder, found by
+ * special-use flag. Nothing here expunges: a deleted or superseded draft is moved to Trash.
+ */
 export function registerDraftTools(server: McpServer, deps: ToolDeps): void {
   const ctx = { env: deps.env, waitUntil: deps.waitUntil };
 
@@ -86,7 +84,7 @@ export function registerDraftTools(server: McpServer, deps: ToolDeps): void {
       title: "Update draft",
       description:
         "Replace an existing draft with new content (IMAP has no in-place edit, so a new draft is saved and the old " +
-        "one removed). All fields are required, as for create_draft. Returns the new uid.",
+        "version is moved to Trash). All fields are required, as for create_draft. Returns the new uid.",
       inputSchema: {
         uid: z
           .number()
@@ -109,28 +107,23 @@ export function registerDraftTools(server: McpServer, deps: ToolDeps): void {
               args,
             );
             const folder = await resolveSpecialUse(client, "\\Drafts");
-            await locked(client, folder, async (c) => {
-              const existing = await c.fetchOne(
-                String(args.uid),
-                { uid: true },
-                { uid: true },
-              );
-              if (!existing)
-                throw new ToolError(
-                  "NOT_FOUND",
-                  `No draft with uid ${args.uid} in ${folder}`,
-                );
-            });
+            const trash = await resolveSpecialUse(client, "\\Trash");
+            await locked(client, folder, (c) => requireDraft(c, args.uid, folder));
             const uid = await appendDraft(client, folder, content);
-            await locked(client, folder, async (c) => {
-              const ok = await c.messageDelete(String(args.uid), { uid: true });
-              if (!ok)
-                throw new ToolError(
-                  "IMAP_DELETE_FAILED",
-                  `Saved the new draft as uid ${uid} in ${folder}, but Yahoo did not delete the old draft ${args.uid}. Remove it with delete_draft.`,
-                );
-            });
-            return { uid, folder, replaced_uid: args.uid };
+            const moved = await locked(client, folder, (c) =>
+              c.messageMove(String(args.uid), trash, { uid: true }),
+            );
+            if (!moved)
+              throw new ToolError(
+                "IMAP_MOVE_FAILED",
+                `Saved the new draft as uid ${uid} in ${folder}, but Yahoo did not move the old draft ${args.uid} to ${trash}. Move it with trash_messages.`,
+              );
+            return {
+              uid,
+              folder,
+              replaced_uid: args.uid,
+              old_version_in: trash,
+            };
           }),
       ),
   );
@@ -140,38 +133,57 @@ export function registerDraftTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "Delete draft",
       description:
-        "Permanently delete one draft from the Drafts folder. This is the only permanent delete in this server.",
+        "Move one draft from the Drafts folder to Trash, where it stays recoverable. Nothing is permanently " +
+        "deleted by this server.",
       inputSchema: { uid: z.number().int().positive() },
-      annotations: DESTRUCTIVE_IDEMPOTENT,
+      annotations: WRITE_IDEMPOTENT,
     },
     (args) =>
       runTool(
         deps,
         { name: "delete_draft", kind: "write", args, uids: [args.uid] },
         async () =>
-          withSpecialUse(ctx, "\\Drafts", async (client, folder) => {
-            const existing = await client.fetchOne(
-              String(args.uid),
-              { uid: true },
-              { uid: true },
-            );
-            if (!existing)
-              throw new ToolError(
-                "NOT_FOUND",
-                `No draft with uid ${args.uid} in ${folder}`,
-              );
-            const ok = await client.messageDelete(String(args.uid), {
-              uid: true,
+          withImap(ctx, async (client) => {
+            const folder = await resolveSpecialUse(client, "\\Drafts");
+            const trash = await resolveSpecialUse(client, "\\Trash");
+            const result = await locked(client, folder, async (c) => {
+              await requireDraft(c, args.uid, folder);
+              return c.messageMove(String(args.uid), trash, { uid: true });
             });
-            if (!ok)
+            if (!result)
               throw new ToolError(
-                "IMAP_DELETE_FAILED",
-                `Yahoo did not delete draft ${args.uid}`,
+                "IMAP_MOVE_FAILED",
+                `Yahoo did not move draft ${args.uid} from ${folder} to ${trash}`,
               );
-            return { deleted: true, uid: args.uid, folder };
+            return {
+              trashed: true,
+              uid: args.uid,
+              folder,
+              trash_folder: trash,
+              trash_uid: result.uidMap?.get(args.uid) ?? null,
+            };
           }),
       ),
   );
+}
+
+/**
+ * The uid must exist in the Drafts folder. The \\Draft flag is deliberately not required: Yahoo
+ * does not keep it on an APPENDed draft (seen live 2026-10-12), and since both draft tools only
+ * ever move to Trash, a message that merely sits in Drafts loses nothing by qualifying.
+ */
+async function requireDraft(
+  client: ImapFlow,
+  uid: number,
+  folder: string,
+): Promise<void> {
+  const existing = await client.fetchOne(
+    String(uid),
+    { uid: true },
+    { uid: true },
+  );
+  if (!existing)
+    throw new ToolError("NOT_FOUND", `No draft with uid ${uid} in ${folder}`);
 }
 
 /** Build the RFC 5322 text for a draft, threading it onto the original when replying. */

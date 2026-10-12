@@ -28,7 +28,8 @@ Project-specific conventions. General style follows the global instructions.
 
 - `/authorize` is the only route that trusts a human. It must call `requireOperator` before anything else.
 - Never add a second bypass. `ACCESS_DEV_BYPASS` is the one dev escape hatch and it already refuses non-localhost hosts.
-- Scopes are recorded on the grant for audit; enforcement of per-scope tool visibility is a v2 concern.
+- Scopes gate tool registration in `buildServer`; never register a tool outside its scope group, and the send group also needs `mail.read`.
+- Nothing expunges. A tool that "deletes" moves the message to Trash; never add `messageDelete` or EXPUNGE to a tool.
 
 ## Types and schemas
 

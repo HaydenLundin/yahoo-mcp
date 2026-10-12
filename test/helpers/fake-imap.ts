@@ -53,8 +53,8 @@ export class FakeImapFlow {
   static rejectThreadIdSearch = false;
   /** Thrown by a THREADID search when set: stands in for a dead or throttled connection. */
   static threadIdSearchError: unknown = null;
-  /** When true, messageDelete reports failure without touching anything. */
-  static failDelete = false;
+  /** When true, messageMove reports failure without touching anything. */
+  static failMove = false;
   /** `uid:part:start` -> how many more times that body window should come back empty (a Yahoo hiccup). */
   static emptyWindows = new Map<string, number>();
   /** The socket object of the most recently constructed client, to assert the backpressure patch. */
@@ -66,7 +66,7 @@ export class FakeImapFlow {
     FakeImapFlow.failConnect = null;
     FakeImapFlow.rejectThreadIdSearch = false;
     FakeImapFlow.threadIdSearchError = null;
-    FakeImapFlow.failDelete = false;
+    FakeImapFlow.failMove = false;
     FakeImapFlow.emptyWindows = new Map();
     FakeImapFlow.lastSocket = null;
   }
@@ -258,6 +258,7 @@ export class FakeImapFlow {
     FakeImapFlow.calls.push(
       `move:${from.path}->${destination}:${[...wanted].join(",")}`,
     );
+    if (FakeImapFlow.failMove) return false;
     const uidMap = new Map<number, number>();
     for (const m of from.messages.filter((x) => wanted.has(x.uid))) {
       from.messages.splice(from.messages.indexOf(m), 1);
@@ -310,7 +311,6 @@ export class FakeImapFlow {
     FakeImapFlow.calls.push(
       `delete:${this.selected.path}:${[...wanted].join(",")}`,
     );
-    if (FakeImapFlow.failDelete) return false;
     const before = this.selected.messages.length;
     this.selected.messages = this.selected.messages.filter(
       (m) => !wanted.has(m.uid),

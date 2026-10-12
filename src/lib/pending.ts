@@ -16,6 +16,8 @@ export interface PendingPreview {
   bcc: string[];
   subject: string;
   body_text: string;
+  /** Present when the message carries an HTML alternative; that is what most recipients see. */
+  body_html?: string;
   in_reply_to_uid?: number;
   forwarded_uid?: number;
   attachments_omitted?: string[];

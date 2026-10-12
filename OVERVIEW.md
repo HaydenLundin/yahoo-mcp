@@ -38,7 +38,7 @@ Modeled on the Gmail connector in claude.ai (as of Aug 2026): search/read, draft
 
 Every write action is logged with which AI client did it and when.
 
-**Why the approval step matters.** Email bodies are untrusted input. A malicious message could try to instruct the assistant to forward your inbox somewhere. Requiring you to confirm every send — and never exposing permanent delete or attachment download — limits what a hijacked assistant can do.
+**Why the approval step matters.** Email bodies are untrusted input. A malicious message could try to instruct the assistant to forward your inbox somewhere. The server never sends without a confirm token that the same client prepared within the last five minutes, and a token works once. Whether a human approved it is enforced by your client: `confirm_send` is marked destructive, so claude.ai, ChatGPT and Claude Code prompt before running it. Keep that prompt on. Nothing is permanently deleted and attachments are never downloaded, which bounds what a hijacked assistant can do.
 
 ---
 
@@ -123,10 +123,10 @@ Each client gets its own token. Revoking one (from the Worker's KV, or by rotati
 - **Audit:** `wrangler d1 execute yahoo_mcp --command "SELECT ts, client_name, tool, uids, outcome FROM audit_log ORDER BY ts DESC LIMIT 50"`.
 - **Revoke a client:** open `https://yahoo-mcp.clthrl.workers.dev/authorize/connections` (behind the same Cloudflare Access sign-in as the consent page). Each row is one connected client with its scopes, when it was granted, and its last audited activity; Revoke invalidates its tokens immediately. Rotating the Yahoo app password revokes everyone at once.
 - **Logs:** Workers observability is enabled; `wrangler tail` streams live.
-- **Abuse protection:** the token and registration endpoints are rate limited per IP (30 and 5 requests per minute); a throttled caller gets HTTP 429 with `Retry-After`. Nothing else is reachable without a bearer token or the Access sign-in.
+- **Abuse protection:** the token and registration endpoints are rate limited per IP (30 and 5 requests per minute); a throttled caller gets HTTP 429 with `Retry-After`. Without a bearer token or the Access sign-in, the only other reachable pages are the landing page, `/healthz`, and the OAuth discovery documents.
 
 ---
 
 ## Status
 
-Spike passed on 2026-09-08 on both local workerd and the real edge: `imapflow` runs on Cloudflare Workers, so this is a single deployable. Building milestone 2 (OAuth + MCP scaffold). Details in `ARCHITECTURE.md` §10.
+All seven milestones are built and deployed; version 1.0.0-rc.2 is in operator trial ahead of 1.0. Details in `ARCHITECTURE.md`.

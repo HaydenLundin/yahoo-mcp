@@ -5,6 +5,7 @@ import {
   formatDate,
   parseAddress,
   qpEncode,
+  withoutBcc,
 } from "../src/lib/compose";
 
 describe("parseAddress", () => {
@@ -173,5 +174,27 @@ describe("header encoding keeps whole characters", () => {
     });
     const to = raw.split("\r\n").find((l) => l.startsWith("To:"));
     expect(to).toBe('To: "Doe, John \\"JD\\"" <j@e.example>');
+  });
+});
+
+describe("withoutBcc", () => {
+  it("drops the Bcc header, folded continuations included, and nothing else", () => {
+    const raw =
+      "From: me@yahoo.com\r\nTo: a@x.example\r\nBcc: b@x.example,\r\n c@x.example\r\nSubject: Bcc: not a header\r\n\r\nBody mentions\r\nBcc: in text\r\n";
+    expect(withoutBcc(raw)).toBe(
+      "From: me@yahoo.com\r\nTo: a@x.example\r\nSubject: Bcc: not a header\r\n\r\nBody mentions\r\nBcc: in text\r\n",
+    );
+  });
+
+  it("leaves a message without Bcc untouched", () => {
+    const raw = buildMessage({ from: "me@yahoo.com", to: ["a@x.example"], subject: "s", text: "t" });
+    expect(withoutBcc(raw)).toBe(raw);
+  });
+
+  it("strips exactly what buildMessage adds for bcc", () => {
+    const withBcc = buildMessage({ from: "me@yahoo.com", to: ["a@x.example"], bcc: ["Hidden <h@x.example>"], subject: "s", text: "t" });
+    expect(withBcc).toContain("Bcc: Hidden <h@x.example>\r\n");
+    expect(withoutBcc(withBcc)).not.toMatch(/^bcc:/im);
+    expect(withoutBcc(withBcc)).toContain("To: a@x.example\r\n");
   });
 });

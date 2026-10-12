@@ -13,9 +13,11 @@ import {
   withImap,
   withMailbox,
   withSpecialUse,
+  type DownloadedText,
 } from "../../lib/imap";
 import {
   BODY_LIMIT,
+  type BodyPart,
   formatAddresses,
   htmlToText,
   listAttachments,
@@ -422,41 +424,35 @@ export async function readBody(
   const parts = selectBodyParts(msg.bodyStructure);
   // Pull a little more than the cap so truncation happens on our side, not mid-decode.
   const maxBytes = limit * 4 + 4096;
+  const fetch = (part: BodyPart) => downloadText(client, msg.uid, part, maxBytes);
 
   if (format === "html") {
-    if (parts.html) {
-      const html = await downloadText(client, msg.uid, parts.html, maxBytes);
-      return {
-        ...truncateText(stripActiveContent(html), limit),
-        format: "html",
-      };
-    }
-    if (parts.text) {
-      return {
-        ...truncateText(
-          await downloadText(client, msg.uid, parts.text, maxBytes),
-          limit,
-        ),
-        format: "text",
-      };
-    }
+    if (parts.html)
+      return { ...capped(await fetch(parts.html), limit, stripActiveContent), format: "html" };
+    if (parts.text) return { ...capped(await fetch(parts.text), limit), format: "text" };
     return { text: "", format: "html", truncated: false };
   }
-
-  if (parts.text) {
-    return {
-      ...truncateText(
-        await downloadText(client, msg.uid, parts.text, maxBytes),
-        limit,
-      ),
-      format: "text",
-    };
-  }
-  if (parts.html) {
-    const html = await downloadText(client, msg.uid, parts.html, maxBytes);
-    return { ...truncateText(htmlToText(html), limit), format: "text" };
-  }
+  if (parts.text) return { ...capped(await fetch(parts.text), limit), format: "text" };
+  if (parts.html)
+    return { ...capped(await fetch(parts.html), limit, htmlToText), format: "text" };
   return { text: "", format: "text", truncated: false };
+}
+
+/**
+ * Apply the character cap, and never report a prefix as the whole: a part the byte cap cut short
+ * is truncated even when its decoded text fits, which markup-heavy HTML often does.
+ */
+function capped(
+  downloaded: DownloadedText,
+  limit: number,
+  transform: (s: string) => string = (s) => s,
+): { text: string; truncated: boolean } {
+  const cut = truncateText(transform(downloaded.text), limit);
+  if (downloaded.complete || cut.truncated) return cut;
+  return {
+    text: `${cut.text}\n[... truncated: the message is longer than the fetch limit]`,
+    truncated: true,
+  };
 }
 
 /** When HTML is requested, still never hand a client executable content. */

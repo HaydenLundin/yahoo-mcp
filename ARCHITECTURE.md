@@ -77,7 +77,7 @@ Gemini CLI itself was retired for free / AI Pro / AI Ultra tiers on 2026-06-18; 
 
 **Primary: single Cloudflare Worker.**
 
-Rationale: as of compatibility date `2026-08-04`, `nodejs_compat` + `nodejs_compat_v2` are on by default in workerd, and the runtime provides client-side `node:net` and `node:tls` (backed by `cloudflare:sockets`). `imapflow` and `nodemailer` only need the client side. Server-side APIs (`net.Server`, `tls.createServer`) are unsupported, which is fine.
+Rationale: as of compatibility date `2026-08-04`, `nodejs_compat` + `nodejs_compat_v2` are on by default in workerd, and the runtime provides client-side `node:net` and `node:tls` (backed by `cloudflare:sockets`). `imapflow` and our SMTP client only need the client side. Server-side APIs (`net.Server`, `tls.createServer`) are unsupported, which is fine.
 
 ```
 MCP client
@@ -96,7 +96,7 @@ MCP client
 │    └─ tools/read.ts  draft.ts  organize.ts  send.ts         │
 │                                                             │
 │  lib/imap.ts   (imapflow, per-call connect/logout)          │
-│  lib/smtp.ts   (nodemailer)                                 │
+│  lib/smtp.ts   (own client)                                 │
 │                                                             │
 │  D1: pending_sends, audit_log                               │
 │  Secrets: YAHOO_USER, YAHOO_APP_PASSWORD, SEND_ENABLED      │
@@ -137,7 +137,7 @@ export default new OAuthProvider({
 ```
 - Access tokens opaque, stored hashed in KV by the library.
 - Refresh tokens rotate on use.
-- Consent screen shows the client's registered name + requested scopes; approve button only. (Single user; no per-scope toggles in v1. Scopes are still recorded on the grant for audit.) The grant's scopes decide which tool groups the server registers for that client (read and the aliases, draft, organize, send); a client that asked for less sees less, and send additionally needs `SEND_ENABLED`.
+- Consent screen shows the client's registered name + requested scopes; approve button only. (Single user; no per-scope toggles in v1. Scopes are still recorded on the grant for audit.) The grant's scopes decide which tool groups the server registers for that client (read and the aliases, draft, organize, send); a client that asked for less sees less, and send additionally needs `SEND_ENABLED`. The send group also needs `mail.read`, because reply and forward read the original.
 - Grant `props` = `{ clientId, clientName, scopes, grantedAt }` → available to every tool call for the audit log.
 
 **Secrets** (`wrangler secret put`): `YAHOO_USER`, `YAHOO_APP_PASSWORD`, `SEND_ENABLED` (`"true"|"false"`), `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`.
@@ -163,8 +163,8 @@ Reference: Anthropic's Gmail connector = search/read, drafts, labels/threads, at
 | Tool | Params | Behavior |
 |---|---|---|
 | `create_draft` | `to[], cc?[], bcc?[], subject, body_text, body_html?, in_reply_to_uid?, in_reply_to_folder="INBOX"` | IMAP `APPEND` to Drafts (found by `\Drafts` special-use) with `\Draft \Seen`; quoted-printable UTF-8, `multipart/alternative` when `body_html` is given; sets In-Reply-To/References from the original when replying. Bcc is kept on the draft so the user sees it |
-| `update_draft` | `uid, ...same` | full replacement: append new, then `UID EXPUNGE` the old one (IMAP has no in-place edit). The old draft is only removed after the new one is saved |
-| `delete_draft` | `uid` | hard delete from Drafts — the only expunge in the system |
+| `update_draft` | `uid, ...same` | full replacement: append new, then move the old version to Trash (IMAP has no in-place edit). The old draft is only moved after the new one is saved; nothing is expunged |
+| `delete_draft` | `uid` | move the draft (any message in the Drafts folder) to Trash, where it stays recoverable. The `\Draft` flag is not required because Yahoo does not keep it on appended drafts. Nothing in the system expunges |
 
 ### 5.3 Organize (`mail.organize`)
 
@@ -210,7 +210,7 @@ Every tool declares annotations. ChatGPT uses them to decide whether to prompt t
 |---|---|---|---|---|
 | all §5.1 read tools, and the `search` / `fetch` aliases (§2.1) | `true` | `false` | `true` | `false` |
 | `create_draft`, `update_draft` | `false` | `false` | `false` | `false` |
-| `delete_draft` | `false` | `true` | `true` | `false` |
+| `delete_draft` | `false` | `false` | `true` | `false` |
 | §5.3 organize tools | `false` | `false` | `true` | `false` |
 | `send_message`, `reply_message`, `forward_message` (phase 1) | `false` | `false` | `false` | `false` |
 | `confirm_send` | `false` | `true` | `false` | **`true`** (leaves the mailbox) |
@@ -326,8 +326,8 @@ Tests run in plain vitest rather than `@cloudflare/vitest-pool-workers`: the too
 
 - Yahoo app password is the only long-lived secret; it never leaves Worker secrets. Rotate by `wrangler secret put`.
 - Every MCP request is Bearer-authenticated by the OAuth layer; the tool handler never sees an unauthenticated call.
-- Prompt injection is the primary threat model (email bodies are attacker-controlled input read by the model). Mitigations: send is two-phase with user-in-the-loop; no attachment content; no permanent delete; `SEND_ENABLED` kill switch; audit log ties every write to a `client_id`.
-- No `Origin`-less POSTs accepted on `/mcp`.
+- Prompt injection is the primary threat model (email bodies are attacker-controlled input read by the model). Mitigations: send is two-phase (a single-use confirm token bound to the client; the human approval itself is enforced by the client's tool prompt, since `confirm_send` is annotated destructive); no attachment content; no permanent delete; `SEND_ENABLED` kill switch; audit log ties every write to a `client_id`.
+- A present `Origin` on `/mcp` must match our origin or the allowlist; server-side clients send none and are accepted.
 - Consent page is behind Cloudflare Access; a stolen OAuth client cannot complete a grant without the operator's identity.
 - Rate limit `/token` and `/register` (Workers Rate Limiting bindings, free): 30 and 5 requests per minute per connecting IP, HTTP 429 with `Retry-After` beyond that (`src/lib/ratelimit.ts`). Both are the only endpoints an anonymous caller can POST to.
 - Operator console at `/authorize/connections` (covered by the same Access application as `/authorize`): lists grants with last audited activity and revokes one client's tokens. CSRF-guarded like the consent form.
@@ -395,7 +395,7 @@ Every tool error is returned as `CODE: message` in a single text content item wi
 | `IMAP_AUTH_FAILED` | Yahoo rejected the app password | revoked or mistyped app password |
 | `IMAP_RATE_LIMITED` | Yahoo is throttling logins for the account | too many tool calls in a short time |
 | `IMAP_CONNECT_FAILED` | could not reach or lost the IMAP server | network, timeout, server closed |
-| `IMAP_SEARCH_FAILED`, `IMAP_MOVE_FAILED`, `IMAP_STORE_FAILED`, `IMAP_APPEND_FAILED`, `IMAP_DELETE_FAILED` | Yahoo refused that command | server-side policy or state |
+| `IMAP_SEARCH_FAILED`, `IMAP_MOVE_FAILED`, `IMAP_STORE_FAILED`, `IMAP_APPEND_FAILED` | Yahoo refused that command | server-side policy or state |
 | `IMAP_<RESPONSE-CODE>` | Yahoo returned a standard response code, surfaced verbatim | `IMAP_NONEXISTENT`, `IMAP_TRYCREATE` |
 | `IMAP_FETCH_INCOMPLETE` | a body window came back short of the size Yahoo declared, twice in a row | server hiccup; retry the call |
 | `SMTP_AUTH_FAILED` | Yahoo SMTP rejected the app password | as above |

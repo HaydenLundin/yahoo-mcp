@@ -6,7 +6,7 @@ import type {
   MessageAddressObject,
 } from "imapflow";
 import { z } from "zod";
-import { buildMessage, parseAddress } from "../../lib/compose";
+import { buildMessage, parseAddress, withoutBcc } from "../../lib/compose";
 import { ToolError } from "../../lib/errors";
 import {
   resolveSpecialUse,
@@ -97,6 +97,7 @@ export function registerSendTools(server: McpServer, deps: ToolDeps): void {
             bcc: args.bcc ?? [],
             subject: args.subject,
             body_text: args.body_text,
+            ...(args.body_html ? { body_html: args.body_html } : {}),
           },
           mime,
         );
@@ -161,6 +162,7 @@ export function registerSendTools(server: McpServer, deps: ToolDeps): void {
                 bcc: [],
                 subject,
                 body_text: args.body_text,
+                ...(args.body_html ? { body_html: args.body_html } : {}),
                 in_reply_to_uid: args.uid,
               },
               mime,
@@ -284,7 +286,12 @@ export function registerSendTools(server: McpServer, deps: ToolDeps): void {
           if (!byMailbox.has(key)) byMailbox.set(key, addr);
         }
         const rcpts = [...byMailbox.values()];
-        const result = await sendRaw(deps.env, { from: self, to: rcpts }, mime);
+        // The Bcc recipients travel in RCPT TO only; the header stays on the Sent copy.
+        const result = await sendRaw(
+          deps.env,
+          { from: self, to: rcpts },
+          withoutBcc(mime),
+        );
         // Yahoo does not file SMTP sends into Sent on its own.
         const savedToSent = await fileCopyInSent(ctx, mime);
         return {

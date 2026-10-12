@@ -451,3 +451,58 @@ describe("get_thread on a long thread", () => {
     expect(searchCalls()).toHaveLength(1);
   });
 });
+
+describe("a body cut by the byte cap is reported as truncated", () => {
+  // 14 bytes of markup per character of text: raw size trips the fetch cap long before the
+  // character cap does, which is exactly the case that used to come back as truncated:false.
+  function markupHeavy(uid: number, bytes: number): FakeFolder[] {
+    const unit = "<span></span>x";
+    const html = unit.repeat(Math.ceil(bytes / unit.length));
+    return [
+      {
+        path: "INBOX",
+        messages: [
+          {
+            uid,
+            flags: ["\\Seen"],
+            size: html.length,
+            envelope: {
+              date: new Date("2026-10-01T00:00:00Z"),
+              subject: "Markup heavy",
+              messageId: `<mh-${uid}@x>`,
+              from: [{ address: "a@x.example" }],
+              to: [{ address: "me@yahoo.com" }],
+            },
+            structure: {
+              part: "1",
+              type: "text/html",
+              encoding: "7bit",
+              size: html.length,
+              parameters: { charset: "utf-8" },
+            } as MessageStructureObject,
+            parts: { "1": html },
+          },
+        ],
+      },
+    ];
+  }
+
+  it("flags a 300 KB HTML part whose text fits the character cap", async () => {
+    await h.close();
+    FakeImapFlow.reset(markupHeavy(5000, 300_000));
+    h = await startHarness();
+    const { data } = await h.call("get_message", { uid: 5000 });
+    const d = data as { body: string; truncated: boolean };
+    expect(d.body.length).toBeLessThan(50_000);
+    expect(d.truncated).toBe(true);
+    expect(d.body).toContain("[... truncated");
+  });
+
+  it("does not flag a part that fits under the byte cap", async () => {
+    await h.close();
+    FakeImapFlow.reset(markupHeavy(5001, 100_000));
+    h = await startHarness();
+    const { data } = await h.call("get_message", { uid: 5001 });
+    expect((data as { truncated: boolean }).truncated).toBe(false);
+  });
+});
