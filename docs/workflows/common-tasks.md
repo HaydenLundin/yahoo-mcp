@@ -13,9 +13,9 @@ Step-by-step checklists for recurring work.
 ## Deploy to production
 
 1. `pnpm typecheck && pnpm e2e` against a local server.
-2. `pnpm run deploy`. First deploy prints the workers.dev URL.
-3. If migrations changed: `pnpm db:migrate:remote`.
-4. If secrets changed: the operator runs `wrangler secret put <NAME>` for each one (`YAHOO_USER`, `YAHOO_APP_PASSWORD`, `SEND_ENABLED`, `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `OPERATOR_EMAIL`). Never paste secret values into chat or files.
+2. If migrations changed: `pnpm db:migrate:remote` first. Migrations only add columns, so the old code keeps working on the new schema, while new code on the old schema would lose audit rows.
+3. `pnpm run deploy`. First deploy prints the workers.dev URL.
+4. If secrets changed: the operator runs `wrangler secret put <NAME>` for each one (`YAHOO_USER`, `YAHOO_APP_PASSWORD`, `SEND_ENABLED`, `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `OPERATOR_EMAIL`, `REGISTRATION_ENABLED`). Never paste secret values into chat or files.
 5. Smoke test: `curl -i https://<host>/mcp` returns 401 with `WWW-Authenticate`; `https://<host>/authorize` redirects to the Cloudflare Access login.
 
 ## Set up Cloudflare Access on /authorize (once)
@@ -51,13 +51,17 @@ claude mcp add --transport http yahoo https://yahoo-mcp.clthrl.workers.dev/mcp
 
 `wrangler secret put SEND_ENABLED` with value `false`. The send tools disappear from `tools/list` on the next request for every client. Set `true` to re-enable.
 
+## Close or reopen client registration
+
+`wrangler secret put REGISTRATION_ENABLED` with value `false` once every client you want is connected. `/register` answers 403 from the next request; existing grants keep working. Set `true` (or `wrangler secret delete REGISTRATION_ENABLED`) before onboarding a new client.
+
 ## Read the audit log
 
-`pnpm audit:tail` prints the last 50 rows from production. For a specific client, filter by `client_name`.
+`pnpm audit:tail` prints the last 50 rows from production. For a specific client, filter by `client_name`. The `detail` column (migration 0002) says what a write touched: `from_folder`, `to_folder`, `moved` for moves; `to`, `cc`, `bcc` counts, recipient `domains`, `message_id`, `accepted`, `rejected` for a send. Rows older than 180 days are purged by the cron; D1 Time Travel can restore the previous 7 days (Free plan) if that is ever needed.
 
 ## Revoke one client
 
-Open `https://yahoo-mcp.clthrl.workers.dev/authorize/connections`, sign in through Cloudflare Access, and press Revoke on the client's row. Its tokens stop working immediately and it must sign in and consent again. Rotating the Yahoo app password revokes everyone at once.
+Open `https://yahoo-mcp.clthrl.workers.dev/authorize/connections`, sign in through Cloudflare Access, and press Revoke on the client's row. Its tokens stop working within about a minute (the token store is eventually consistent) and it must sign in and consent again. Rotating the Yahoo app password revokes everyone at once.
 
 ## Add a tool
 
@@ -65,3 +69,7 @@ Open `https://yahoo-mcp.clthrl.workers.dev/authorize/connections`, sign in throu
 2. Implement in the matching `src/mcp/tools/*.ts` inside `runTool`.
 3. Extend `scripts/e2e-oauth.mjs` or the vitest suite so the tool is exercised.
 4. Run the local loop, then update `OVERVIEW.md` if the user-facing capability changed.
+
+## Run the spike worker
+
+The spike (`spike/`) logs into the real mailbox on request, so it fails closed: every route except `/ping` needs the `SPIKE_TOKEN` value from `spike/.dev.vars` in an `x-spike-token` header, and answers 403 without it. Never deploy the spike; `spike-remote` in `.claude/launch.json` exists only for a one-off edge comparison and needs the secret set the same way.

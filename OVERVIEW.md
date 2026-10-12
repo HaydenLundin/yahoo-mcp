@@ -29,7 +29,7 @@ Modeled on the Gmail connector in claude.ai (as of Aug 2026): search/read, draft
 | Search and read messages and threads | ✅ | read tools |
 | See attachment names/sizes | ✅ | metadata only — attachment content is never downloaded |
 | Create, edit, delete drafts | ✅ | drafts live in your Yahoo Drafts folder |
-| Move, archive, trash, flag, mark read/unread | ✅ | trash = move to Trash folder; recoverable |
+| Move, archive, trash, flag, mark read/unread | ✅ | trash = move to Trash folder; recoverable until Yahoo empties Trash on its own schedule (its help pages say after 7 days) |
 | Send, reply, forward | ⚠️ with approval | two-step: assistant shows a preview, sends only after you confirm; token expires in 5 min |
 | Permanently delete mail | ❌ | no such tool exists |
 | Download attachments | ❌ | no such tool exists |
@@ -111,7 +111,7 @@ If OAuth doesn't trigger, use the `mcp-remote` wrapper instead:
 
 **Anything else** (Cursor, Windsurf, etc.): paste the URL if the client supports remote OAuth MCP natively; otherwise the `mcp-remote` snippet above works in any stdio-only client.
 
-Each client gets its own token. Revoking one (from the Worker's KV, or by rotating the Yahoo app password) doesn't affect the others.
+Each client gets its own token. Revoking one (from the connections console, or by rotating the Yahoo app password) doesn't affect the others.
 
 ---
 
@@ -120,8 +120,10 @@ Each client gets its own token. Revoking one (from the Worker's KV, or by rotati
 - **Rotate the Yahoo app password:** generate a new one at login.yahoo.com/account/security, then `wrangler secret put YAHOO_APP_PASSWORD`.
 - **Enable sending:** `wrangler secret put SEND_ENABLED` → `true`. The five send tools appear on every client's next request. The assistant will show you the exact recipients, subject, and text, and sends only after you confirm; the preview expires after 5 minutes.
 - **Read-only mode:** `wrangler secret put SEND_ENABLED` → `false`. Takes effect on next request.
-- **Audit:** `wrangler d1 execute yahoo_mcp --command "SELECT ts, client_name, tool, uids, outcome FROM audit_log ORDER BY ts DESC LIMIT 50"`.
-- **Revoke a client:** open `https://yahoo-mcp.clthrl.workers.dev/authorize/connections` (behind the same Cloudflare Access sign-in as the consent page). Each row is one connected client with its scopes, when it was granted, and its last audited activity; Revoke invalidates its tokens immediately. Rotating the Yahoo app password revokes everyone at once.
+- **Close registration:** `wrangler secret put REGISTRATION_ENABLED` → `false` once your clients are connected; `/register` then answers 403 and nobody new can even start the OAuth dance. Set it to `true` (or delete the secret) to onboard another client.
+- **Audit:** `wrangler d1 execute yahoo_mcp --command "SELECT ts, client_name, tool, uids, outcome, detail FROM audit_log ORDER BY ts DESC LIMIT 50"` (or `pnpm audit:tail`). `detail` says what a write touched: folders and a count for a move, recipient counts, domains, and the message id for a send; never an address or a body. Rows older than 180 days are purged.
+- **Revoke a client:** open `https://yahoo-mcp.clthrl.workers.dev/authorize/connections` (behind the same Cloudflare Access sign-in as the consent page). Each row is one connected client with its scopes, when it was granted, and its last audited activity; Revoke invalidates its tokens within about a minute (the token store is eventually consistent). Rotating the Yahoo app password revokes everyone at once.
+- **Token lifetimes:** access tokens last an hour and refresh on their own; a refresh token lasts 30 days from issue, so a client idle for a month signs in again. A client's registration lasts 90 days; a dormant one re-registers and asks for consent again. Nothing here needs you.
 - **Logs:** Workers observability is enabled; `wrangler tail` streams live.
 - **Abuse protection:** the token and registration endpoints are rate limited per IP (30 and 5 requests per minute); a throttled caller gets HTTP 429 with `Retry-After`. Without a bearer token or the Access sign-in, the only other reachable pages are the landing page, `/healthz`, and the OAuth discovery documents.
 

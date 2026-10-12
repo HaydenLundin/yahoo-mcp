@@ -8,6 +8,7 @@
     "global_fetch_strictly_public"
   ],
   "workers_dev": true,
+  "preview_urls": false,
   "observability": {
     "enabled": true
   },

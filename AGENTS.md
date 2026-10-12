@@ -19,7 +19,9 @@ pnpm audit:tail           # last 50 audit rows from production D1
 
 - TypeScript strict, ES modules, Hono router, `@modelcontextprotocol/sdk` with zod v4 schemas.
 - One tool per `server.registerTool(...)` call in `src/mcp/tools/*.ts`. Tool and parameter names are snake_case. Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) per `ARCHITECTURE.md` section 5.6.
-- Every tool body runs inside `runTool()` from `src/mcp/tool.ts`. Do not catch IMAP errors or write audit rows inside tools; the wrapper does both.
+- Every tool body runs inside `runTool()` from `src/mcp/tool.ts`. Do not catch IMAP errors or write audit rows inside tools; the wrapper does both. A write tool that wants its audit row to say what it touched calls the `note()` callback the wrapper passes to the body: counts, folder names, recipient domains, message ids only; never addresses or bodies (`audit_log.detail`, migration 0002).
+- Migrations only add columns, and `pnpm db:migrate:remote` runs before `pnpm run deploy`, so new code never writes to a column that is not there yet.
+- `REGISTRATION_ENABLED=false` closes `/register` with 403; the gate and the registration caps live in `src/auth/registration.ts` and run in `src/index.ts` before the provider, next to the rate limiter.
 - IMAP access goes through `withImap` / `withMailbox` in `src/lib/imap.ts`: one connection per tool call, always UID based, never sequence numbers.
 - Resolve special folders (Sent, Drafts, Trash, Archive, Junk) by IMAP special-use flag, never by name. Yahoo names them `Sent`, `Draft`, `Trash`, `Archive`, `Bulk`.
 - Message bodies never reach logs or the audit table. Audit digests exclude `body_text`, `body_html`, `note`.

@@ -42,3 +42,5 @@ Known behaviours that look like bugs but are not, and where to look first.
 - Server-side clients send no `Origin`. If a client gets `403 Origin not allowed`, it is browser-based; add its origin to `ALLOWED_ORIGINS`.
 - The consent POST is rejected with 403 when `Sec-Fetch-Site` is not same-origin. Tools that replay the form must send `Origin` or `Sec-Fetch-Site` like a browser would; see `scripts/e2e-oauth.mjs`.
 - `pnpm e2e` is the fastest way to localise a problem: it prints which of the nine steps failed and the server's response body.
+- `SMTP_OUTCOME_UNKNOWN` means the connection dropped after the whole message went out and before Yahoo's reply. Check the Sent folder or ask the recipient before resending; the tool does not retry on its own.
+- Audit rows arriving with an empty `detail` after a deploy usually mean migration 0002 was not applied; run `pnpm db:migrate:remote`. The insert is inside a try, so a missing column loses rows silently rather than failing the tool.
