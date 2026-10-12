@@ -44,10 +44,13 @@ export function registerOrganizeTools(server: McpServer, deps: ToolDeps): void {
       runTool(
         deps,
         { name: "move_messages", kind: "write", args, uids: args.uids },
-        async () =>
-          withMailbox(ctx, args.from_folder, (client) =>
+        async (note) => {
+          const r = await withMailbox(ctx, args.from_folder, (client) =>
             moveUids(client, args.uids, args.from_folder, args.to_folder),
-          ),
+          );
+          note({ from_folder: r.from_folder, to_folder: r.to_folder, moved: r.moved });
+          return r;
+        },
       ),
   );
 
@@ -67,8 +70,11 @@ export function registerOrganizeTools(server: McpServer, deps: ToolDeps): void {
       runTool(
         deps,
         { name: "archive_messages", kind: "write", args, uids: args.uids },
-        async () =>
-          moveToSpecialUse(ctx, "\\Archive", args.uids, args.from_folder),
+        async (note) => {
+          const r = await moveToSpecialUse(ctx, "\\Archive", args.uids, args.from_folder);
+          note({ from_folder: r.from_folder, to_folder: r.to_folder, moved: r.moved });
+          return r;
+        },
       ),
   );
 
@@ -89,8 +95,11 @@ export function registerOrganizeTools(server: McpServer, deps: ToolDeps): void {
       runTool(
         deps,
         { name: "trash_messages", kind: "write", args, uids: args.uids },
-        async () =>
-          moveToSpecialUse(ctx, "\\Trash", args.uids, args.from_folder),
+        async (note) => {
+          const r = await moveToSpecialUse(ctx, "\\Trash", args.uids, args.from_folder);
+          note({ from_folder: r.from_folder, to_folder: r.to_folder, moved: r.moved });
+          return r;
+        },
       ),
   );
 

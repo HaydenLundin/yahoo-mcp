@@ -54,17 +54,23 @@ export interface RunToolMeta {
 export async function runTool(
   deps: ToolDeps,
   meta: RunToolMeta,
-  body: () => Promise<unknown>,
+  body: (note: (detail: Record<string, unknown>) => void) => Promise<unknown>,
 ): Promise<CallToolResult> {
   const argsDigest =
     meta.kind === "write" ? await digestArgs(meta.args ?? {}) : "";
+  // What the action touched, for the audit row: counts and folder names, never content.
+  let detail: Record<string, unknown> | undefined;
+  const note = (d: Record<string, unknown>) => {
+    detail = { ...detail, ...d };
+  };
   try {
-    const data = await body();
+    const data = await body(note);
     await writeAudit(deps.env, deps.props, {
       tool: meta.name,
       argsDigest,
       uids: meta.uids,
       outcome: "ok",
+      detail,
     });
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
   } catch (err) {
@@ -74,6 +80,7 @@ export async function runTool(
       argsDigest,
       uids: meta.uids,
       outcome: "error",
+      detail,
     });
     return {
       content: [{ type: "text", text: `${e.code}: ${e.message}` }],

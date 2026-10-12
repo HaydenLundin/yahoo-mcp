@@ -424,3 +424,42 @@ describe("the preview shows what recipients will see", () => {
     expect(JSON.parse(row.preview).body_html).toBe("<p>rich</p>");
   });
 });
+
+describe("audit detail on confirm_send", () => {
+  it("keeps counts, recipient domains, and the message id, but no address or body", async () => {
+    const { data } = await h.call("send_message", {
+      to: ["sam@example.com", "Pat <pat@other.example>"],
+      bcc: ["hidden@example.com"],
+      subject: "Hello",
+      body_text: "Body",
+    });
+    const token = (data as { confirm_token: string }).confirm_token;
+    await h.call("confirm_send", { confirm_token: token });
+    const row = h.db.rows.at(-1)!;
+    expect(row.tool).toBe("confirm_send");
+    const detail = JSON.parse(row.detail ?? "{}") as Record<string, unknown>;
+    expect(detail).toMatchObject({
+      to: 2,
+      cc: 0,
+      bcc: 1,
+      domains: ["example.com", "other.example"],
+      accepted: 3,
+      rejected: 0,
+      message_id: expect.stringMatching(/^<.+@yahoo\.com>$/),
+    });
+    expect(row.detail).not.toContain("sam@");
+    expect(row.detail).not.toContain("hidden@");
+    expect(row.detail).not.toContain("Body");
+  });
+
+  it("refuses an address longer than the RFC maximum before any IMAP or SMTP work", async () => {
+    const { raw, data } = await h.call("send_message", {
+      to: [`${"a".repeat(330)}@example.com`],
+      subject: "x",
+      body_text: "y",
+    });
+    expect(raw.isError).toBe(true);
+    expect(String(data)).toMatch(/-32602|invalid/i);
+    expect(FakeImapFlow.calls).not.toContain("connect");
+  });
+});

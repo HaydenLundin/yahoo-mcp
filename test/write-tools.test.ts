@@ -24,6 +24,7 @@ const uidsIn = (path: string) =>
     .messages.map((m) => m.uid)
     .sort((a, b) => a - b);
 const lastAudit = () => h.db.rows.at(-1)!;
+const lastDetail = () => JSON.parse(lastAudit().detail ?? "null") as Record<string, unknown> | null;
 
 describe("tools/list annotations", () => {
   it("marks organize tools idempotent, drafts non-idempotent, delete_draft a reversible move", async () => {
@@ -382,5 +383,20 @@ describe("mail moved into Drafts cannot be lost through the draft tools", () => 
     const survivor = FakeImapFlow.folder("Trash").messages.find((m) => m.uid === trashUid);
     expect(survivor?.envelope.subject).toBe("Lease renewal");
     expect(FakeImapFlow.calls.some((c) => c.startsWith("delete:"))).toBe(false);
+  });
+});
+
+describe("audit detail", () => {
+  it("records what a move touched: folders and a count, never the arguments", async () => {
+    await h.call("move_messages", { uids: [101, 102], to_folder: "Archive" });
+    expect(lastAudit().tool).toBe("move_messages");
+    expect(lastDetail()).toEqual({ from_folder: "INBOX", to_folder: "Archive", moved: 2 });
+    await h.call("trash_messages", { uids: [103] });
+    expect(lastDetail()).toMatchObject({ to_folder: "Trash", moved: 1 });
+  });
+
+  it("stays empty for tools that do not note anything", async () => {
+    await h.call("mark_read", { uids: [101] });
+    expect(lastAudit().detail).toBeNull();
   });
 });
