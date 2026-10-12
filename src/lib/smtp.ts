@@ -85,15 +85,27 @@ export async function sendRaw(
           `Yahoo refused the message data. Server said: ${r.text}`,
         ),
     );
-    const final = await session.command(
-      `${dotStuff(raw)}.`,
-      [250],
-      (r) =>
-        new ToolError(
-          "SMTP_MESSAGE_REJECTED",
-          `Yahoo rejected the message. Server said: ${r.text}`,
-        ),
-    );
+    let final: Reply;
+    try {
+      final = await session.command(
+        `${dotStuff(raw)}.`,
+        [250],
+        (r) =>
+          new ToolError(
+            "SMTP_MESSAGE_REJECTED",
+            `Yahoo rejected the message. Server said: ${r.text}`,
+          ),
+      );
+    } catch (err) {
+      // Once the payload is on the wire a dropped connection no longer means "not sent".
+      if (err instanceof ToolError && err.code === "SMTP_CONNECT_FAILED") {
+        throw new ToolError(
+          "SMTP_OUTCOME_UNKNOWN",
+          "The connection dropped after the message was transmitted; Yahoo may still have delivered it. Do not resend until the recipient has been asked.",
+        );
+      }
+      throw err;
+    }
     await session.command("QUIT", null).catch(() => undefined);
     return {
       messageId: extractMessageId(raw),
@@ -300,7 +312,7 @@ export class SmtpSession {
 
 /** RFC 5321 section 4.5.2: a line starting with "." gets a second "."; CRLF endings; final CRLF. */
 export function dotStuff(raw: string): string {
-  const normalized = raw.replace(/\r?\n/g, "\r\n");
+  const normalized = raw.replace(/\r\n|\r|\n/g, "\r\n");
   const stuffed = normalized
     .split("\r\n")
     .map((l) => (l.startsWith(".") ? `.${l}` : l))

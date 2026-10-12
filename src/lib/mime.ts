@@ -163,30 +163,145 @@ export function decodeCharset(bytes: Uint8Array, charset?: string): string {
 
 /** Enough HTML-to-text for a model to read an email: structure kept, markup and scripts gone. */
 export function htmlToText(html: string): string {
-  let s = html.replace(/<(script|style|head|title)\b[\s\S]*?<\/\1\s*>/gi, "");
-  s = s.replace(/<!--[\s\S]*?-->/g, "");
+  let s = stripComments(stripElements(html, DROPPED_ELEMENTS));
   // Source whitespace (newlines, indentation) is not layout in HTML; flatten it first so
   // the only line breaks in the output are the ones we add from structure.
   s = s.replace(/\s+/g, " ");
-  s = s.replace(/<br\s*\/?>/gi, "\n");
-  s = s.replace(/<li\b[^>]*>/gi, "\n- ");
-  // Paragraph-level blocks end with a blank line, line-level blocks with a single break.
-  s = s.replace(/<\/(p|h[1-6]|ul|ol|blockquote|pre|table)\s*>/gi, "\n\n");
-  s = s.replace(/<\/(div|tr|section|article|header|footer|dd|dt)\s*>/gi, "\n");
-  s = s.replace(
-    /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
-    (_m, href: string, text: string) => {
-      const label = text.replace(/<[^>]+>/g, "").trim();
-      return label && label !== href ? `${label} (${href})` : href;
-    },
-  );
-  s = s.replace(/<[^>]+>/g, "");
+  s = replaceTags(linkifyAnchors(s));
   s = decodeEntities(s);
   s = s.replace(/\r/g, "");
   s = s.replace(/[ \t ]+\n/g, "\n").replace(/\n[ \t ]+/g, "\n");
   s = s.replace(/[ \t ]{2,}/g, " ");
   s = s.replace(/\n{3,}/g, "\n\n");
   return s.trim();
+}
+
+const DROPPED_ELEMENTS = ["script", "style", "head", "title"] as const;
+
+/**
+ * Remove `<tag ...>...</tag>` blocks for the given tags in one forward scan; an unclosed block
+ * runs to the end. Regexes with lazy bodies and backreferences went cubic on crafted HTML made
+ * of unclosed openers (20 KB took seconds), and the Worker's CPU budget is milliseconds.
+ */
+export function stripElements(html: string, tags: readonly string[]): string {
+  const lower = html.toLowerCase();
+  const parts: string[] = [];
+  let i = 0;
+  for (;;) {
+    const open = nextOpener(lower, i, tags);
+    if (!open) {
+      parts.push(html.slice(i));
+      break;
+    }
+    parts.push(html.slice(i, open.index));
+    const close = lower.indexOf(`</${open.tag}`, open.index + open.tag.length + 1);
+    if (close === -1) break;
+    const end = lower.indexOf(">", close);
+    if (end === -1) break;
+    i = end + 1;
+  }
+  return parts.join("");
+}
+
+/** The earliest `<tag` followed by whitespace, `>`, `/` or the end of input. */
+function nextOpener(
+  lower: string,
+  from: number,
+  tags: readonly string[],
+): { index: number; tag: string } | null {
+  let best: { index: number; tag: string } | null = null;
+  for (const tag of tags) {
+    let idx = lower.indexOf(`<${tag}`, from);
+    while (idx !== -1 && (best === null || idx < best.index)) {
+      const after = lower.charAt(idx + tag.length + 1);
+      if (after === "" || after === ">" || after === "/" || /\s/.test(after)) {
+        best = { index: idx, tag };
+        break;
+      }
+      idx = lower.indexOf(`<${tag}`, idx + 1);
+    }
+  }
+  return best;
+}
+
+/** Closing these ends a paragraph (blank line); closing the LINE_END set ends a line. */
+const PARAGRAPH_END = new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "blockquote", "pre", "table"]);
+const LINE_END = new Set(["div", "tr", "section", "article", "header", "footer", "dd", "dt"]);
+
+/**
+ * One forward scan over the remaining tags: structure becomes line breaks, every other tag
+ * disappears. A `<` that never closes swallows the rest, as a browser would. The regex it
+ * replaces (`<[^>]+>`) rescanned to the end of input for every unclosed `<`.
+ */
+function replaceTags(s: string): string {
+  const parts: string[] = [];
+  let i = 0;
+  for (;;) {
+    const lt = s.indexOf("<", i);
+    if (lt === -1) {
+      parts.push(s.slice(i));
+      break;
+    }
+    parts.push(s.slice(i, lt));
+    const gt = s.indexOf(">", lt + 1);
+    if (gt === -1) break;
+    parts.push(tagBreak(s.slice(lt + 1, gt)));
+    i = gt + 1;
+  }
+  return parts.join("");
+}
+
+function tagBreak(inner: string): string {
+  const m = /^(\/?)([a-z][a-z0-9]*)/i.exec(inner);
+  if (!m) return "";
+  const closing = m[1] === "/";
+  const name = m[2].toLowerCase();
+  if (!closing && name === "br") return "\n";
+  if (!closing && name === "li") return "\n- ";
+  if (closing && PARAGRAPH_END.has(name)) return "\n\n";
+  if (closing && LINE_END.has(name)) return "\n";
+  return "";
+}
+
+function stripComments(html: string): string {
+  const parts: string[] = [];
+  let i = 0;
+  for (;;) {
+    const start = html.indexOf("<!--", i);
+    if (start === -1) {
+      parts.push(html.slice(i));
+      break;
+    }
+    parts.push(html.slice(i, start));
+    const end = html.indexOf("-->", start + 4);
+    if (end === -1) break;
+    i = end + 3;
+  }
+  return parts.join("");
+}
+
+/** `<a href="x">label</a>` becomes `label (x)`; an anchor with no closing tag is left for the generic tag strip. */
+function linkifyAnchors(s: string): string {
+  const lower = s.toLowerCase();
+  const parts: string[] = [];
+  let i = 0;
+  for (;;) {
+    const open = nextOpener(lower, i, ["a"]);
+    const tagEnd = open ? s.indexOf(">", open.index) : -1;
+    const close = tagEnd === -1 ? -1 : lower.indexOf("</a", tagEnd);
+    const closeEnd = close === -1 ? -1 : lower.indexOf(">", close);
+    if (!open || tagEnd === -1 || close === -1 || closeEnd === -1) {
+      parts.push(s.slice(i));
+      break;
+    }
+    parts.push(s.slice(i, open.index));
+    const href = /href=["']([^"']+)["']/i.exec(s.slice(open.index, tagEnd))?.[1];
+    const label = replaceTags(s.slice(tagEnd + 1, close)).trim();
+    if (href) parts.push(label && label !== href ? `${label} (${href})` : href);
+    else parts.push(s.slice(open.index, closeEnd + 1));
+    i = closeEnd + 1;
+  }
+  return parts.join("");
 }
 
 const NAMED_ENTITIES: Record<string, string> = {

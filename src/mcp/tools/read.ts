@@ -24,6 +24,7 @@ import {
   parseHeaderBlock,
   selectBodyParts,
   splitMessageIds,
+  stripElements,
   toIsoDate,
   truncateText,
 } from "../../lib/mime";
@@ -457,9 +458,7 @@ function capped(
 
 /** When HTML is requested, still never hand a client executable content. */
 function stripActiveContent(html: string): string {
-  return html
-    .replace(/<(script|iframe|object|embed)\b[\s\S]*?<\/\1\s*>/gi, "")
-    .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  return stripElements(html, ["script", "iframe", "object", "embed"]).replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
 }
 
 interface ThreadResolution {
@@ -517,9 +516,12 @@ async function threadUids(
     },
     { uid: true },
   );
-  const uids = Array.isArray(result) ? result : [];
+  // ImapFlow answers false (or nothing) when the server rejects the SEARCH; silently showing a
+  // one-message thread would be wrong, so it is an error the client can retry.
+  if (!Array.isArray(result))
+    throw new ToolError("IMAP_SEARCH_FAILED", "Yahoo rejected the thread search");
   return {
-    uids: withTarget(uids, target.uid),
+    uids: withTarget(result, target.uid),
     threadId: null,
     method: "references",
   };

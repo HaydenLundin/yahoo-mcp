@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildMessage,
   encodeHeaderText,
+  foldHeader,
   formatDate,
   parseAddress,
   qpEncode,
@@ -111,7 +112,8 @@ describe("buildMessage", () => {
     expect(msg).toContain(
       "References: <root@example.com> <orig@example.com>\r\n",
     );
-    expect(msg).toMatch(
+    // Header folding may break the line after the semicolon; unfolded it is one header.
+    expect(msg.replace(/\r\n /g, " ")).toMatch(
       /Content-Type: multipart\/alternative; boundary="[^"]+"\r\n/,
     );
     expect(msg).toContain("Content-Type: text/plain; charset=utf-8\r\n");
@@ -196,5 +198,62 @@ describe("withoutBcc", () => {
     expect(withBcc).toContain("Bcc: Hidden <h@x.example>\r\n");
     expect(withoutBcc(withBcc)).not.toMatch(/^bcc:/im);
     expect(withoutBcc(withBcc)).toContain("To: a@x.example\r\n");
+  });
+});
+
+const base = {
+  from: "me@yahoo.com",
+  to: ["a@b.example"],
+  subject: "Re: x",
+  text: "y",
+  messageId: "<m@yahoo.com>",
+  date: new Date(0),
+};
+
+describe("threading header hygiene", () => {
+  it("drops ids carrying whitespace or control characters instead of putting them on the wire", () => {
+    const raw = buildMessage({
+      ...base,
+      inReplyTo: "<ok@x>\r\nBcc: victim@evil.example",
+      references: ["<good@x>", "<bad\nX-Injected: 1@x>", "no-brackets@x", "<also good@x>", "<fine@x>"],
+    });
+    expect(raw).not.toContain("In-Reply-To:");
+    expect(raw).not.toContain("victim@evil.example");
+    expect(raw).not.toContain("X-Injected");
+    expect(raw).toContain("References: <good@x> <fine@x>\r\n");
+  });
+
+  it("caps References at twenty ids, keeping the root and the most recent", () => {
+    const ids = Array.from({ length: 30 }, (_, i) => `<r${i}@x>`);
+    const raw = buildMessage({ ...base, references: ids });
+    const line = /References:((?:.|\r\n )+?)\r\n(?! )/.exec(raw)![1].replace(/\r\n /g, " ").trim();
+    const kept = line.split(" ");
+    expect(kept).toHaveLength(20);
+    expect(kept[0]).toBe("<r0@x>");
+    expect(kept.at(-1)).toBe("<r29@x>");
+    expect(kept[1]).toBe("<r11@x>");
+  });
+});
+
+describe("foldHeader", () => {
+  it("folds at spaces so no line exceeds 78 characters and unfolding restores the value", () => {
+    const value = Array.from({ length: 12 }, (_, i) => `<id-number-${i}@example.com>`).join(" ");
+    const folded = foldHeader("References", value);
+    for (const line of folded.split("\r\n")) expect(line.length).toBeLessThanOrEqual(78);
+    expect(folded.split("\r\n").length).toBeGreaterThan(1);
+    expect(folded.replace(/\r\n /g, " ")).toBe(`References: ${value}`);
+  });
+
+  it("leaves a single over-long token whole and short values untouched", () => {
+    const token = "x".repeat(120);
+    expect(foldHeader("Subject", token)).toBe(`Subject: ${token}`);
+    expect(foldHeader("To", "a@b.example")).toBe("To: a@b.example");
+  });
+
+  it("is applied by buildMessage to long address lists", () => {
+    const to = Array.from({ length: 8 }, (_, i) => `Person Number ${i} <person${i}@example.com>`);
+    const raw = buildMessage({ ...base, to });
+    const head = raw.split("\r\n\r\n")[0];
+    for (const line of head.split("\r\n")) expect(line.length).toBeLessThanOrEqual(78);
   });
 });

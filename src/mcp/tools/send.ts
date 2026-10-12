@@ -47,7 +47,7 @@ const NEXT_STEP =
   "call confirm_send with confirm_token. To discard, call cancel_send. The token expires in 5 minutes.";
 
 const recipients = z
-  .array(z.string().min(3))
+  .array(z.string().min(3).max(320))
   .max(50)
   .describe('"user@example.com" or "Name <user@example.com>"');
 

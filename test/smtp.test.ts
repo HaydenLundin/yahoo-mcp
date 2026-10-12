@@ -38,6 +38,8 @@ describe("dotStuff", () => {
   it("doubles leading dots, normalises to CRLF, and guarantees a final CRLF", () => {
     expect(dotStuff("a\n.b\r\n..c")).toBe("a\r\n..b\r\n...c\r\n");
     expect(dotStuff("x\r\n")).toBe("x\r\n");
+    // A lone CR is a line break to some servers; it must not smuggle a bare "." past dot-stuffing.
+    expect(dotStuff("a\r.b")).toBe("a\r\n..b\r\n");
   });
 });
 
@@ -192,5 +194,31 @@ describe("verifySmtp", () => {
       "AUTH",
       "QUIT",
     ]);
+  });
+});
+
+describe("sendRaw when the reply to the payload never arrives", () => {
+  it("reports SMTP_OUTCOME_UNKNOWN rather than a plain connection failure once the message is on the wire", async () => {
+    const script = happyScript().map((s) =>
+      s.expect instanceof RegExp ? { ...s, reply: "<close>" } : s,
+    );
+    const { connector, sockets } = scriptedConnector(
+      "220 smtp.mail.yahoo.com ESMTP ready",
+      script,
+    );
+    await expect(
+      sendRaw(env, { from: "me@yahoo.com", to: ["a@b.example"] }, RAW, connector),
+    ).rejects.toMatchObject({ code: "SMTP_OUTCOME_UNKNOWN" });
+    expect(sockets[0].written.at(-1)).toMatch(/\r\n\.\r\n$/);
+  });
+
+  it("keeps SMTP_CONNECT_FAILED for a drop before the payload went out", async () => {
+    const script = happyScript().map((s) =>
+      s.expect === "DATA" ? { ...s, reply: "<close>" } : s,
+    );
+    const { connector } = scriptedConnector("220 ready", script);
+    await expect(
+      sendRaw(env, { from: "me@yahoo.com", to: ["a@b.example"] }, RAW, connector),
+    ).rejects.toMatchObject({ code: "SMTP_CONNECT_FAILED" });
   });
 });

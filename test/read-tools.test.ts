@@ -318,6 +318,14 @@ describe("get_thread", () => {
     expect(uids(data)).toEqual([102, 103]);
   });
 
+  it("reports a rejected References search instead of pretending the thread is one message", async () => {
+    FakeImapFlow.rejectThreadIdSearch = true;
+    FakeImapFlow.rejectHeaderSearch = true;
+    const { raw, data } = await h.call("get_thread", { uid: 103 });
+    expect(raw.isError).toBe(true);
+    expect(String(data).startsWith("IMAP_SEARCH_FAILED:")).toBe(true);
+  });
+
   it("includes plain-text bodies on request", async () => {
     const { data } = await h.call("get_thread", {
       uid: 102,

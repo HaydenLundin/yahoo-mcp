@@ -41,6 +41,7 @@ export class FakeSmtp {
 export interface ScriptStep {
   /** Matched against the start of the client's command line (without CRLF). */
   expect: string | RegExp;
+  /** Server text, `|`-separated into chunks; the special value `<close>` drops the connection instead of answering. */
   reply: string;
 }
 
@@ -75,6 +76,10 @@ export class FakeSmtpSocket extends EventEmitter implements SmtpSocket {
       return true;
     }
     this.script.splice(this.script.indexOf(step), 1);
+    if (step.reply === "<close>") {
+      queueMicrotask(() => this.destroy());
+      return true;
+    }
     const chunks = step.reply.split("|");
     queueMicrotask(() => {
       for (const c of chunks) this.emit("data", c);
