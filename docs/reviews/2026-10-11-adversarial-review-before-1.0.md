@@ -143,3 +143,5 @@ Before-tag items 1 to 8 applied and verified (167 unit tests, live e2e PASS, dep
 - Operator checks (item 9): spike worker not deployed (404); production secrets are ACCESS_AUD, ACCESS_TEAM_DOMAIN, SEND_ENABLED, YAHOO_APP_PASSWORD, YAHOO_USER (no ACCESS_DEV_BYPASS); the Access policy allowing exactly one email is the operator's to confirm.
 
 Not done, by design: the 1.0.0 tag itself (operator decision after the Bcc live check), and the 1.0.x list.
+
+B9 done the same day: `OPERATOR_EMAIL` is a required secret and `requireOperator` refuses any Access identity that does not match it, case-insensitively, with a 403 that names neither address. Covered by unit tests.

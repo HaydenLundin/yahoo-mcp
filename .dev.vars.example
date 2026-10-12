@@ -11,6 +11,7 @@ ALLOWED_ORIGINS=http://localhost:6274
 # Production only (set as secrets, leave unset locally):
 # ACCESS_TEAM_DOMAIN=yourteam.cloudflareaccess.com
 # ACCESS_AUD=<Application Audience tag of the Access app on /authorize>
+# OPERATOR_EMAIL=<the one email allowed to approve clients and use the console>
 
 # "true" logs imapflow command failures (summarised) to the Worker log. Off in production.
 IMAP_DEBUG=false

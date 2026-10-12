@@ -53,7 +53,12 @@ afterAll(() => {
 });
 
 const env = (extra: Partial<Env> = {}): Env =>
-  ({ ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD, ...extra }) as Env;
+  ({
+    ACCESS_TEAM_DOMAIN: TEAM,
+    ACCESS_AUD: AUD,
+    OPERATOR_EMAIL: "operator@example.com",
+    ...extra,
+  }) as Env;
 
 async function mint(
   opts: {
@@ -168,6 +173,21 @@ describe("Cloudflare Access gate", () => {
         await requireOperator(request(await mint({ email: null })), env()),
       ),
     ).toBe(403);
+  });
+
+  it("admits only the operator's own identity, however Access was configured", async () => {
+    const other = (await requireOperator(
+      request(await mint({ email: "colleague@example.com" })),
+      env(),
+    )) as Response;
+    expect(other.status).toBe(403);
+    expect(await other.text()).not.toContain("operator@example.com");
+    expect(
+      await requireOperator(request(await mint({ email: "Operator@Example.com" })), env({ OPERATOR_EMAIL: " operator@example.com " })),
+    ).toEqual({ email: "Operator@Example.com" });
+    expect(
+      statusOf(await requireOperator(request(await mint()), env({ OPERATOR_EMAIL: undefined }))),
+    ).toBe(503);
   });
 
   it("asks for a token when none is presented, and reports a missing configuration", async () => {

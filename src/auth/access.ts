@@ -28,9 +28,9 @@ export async function requireOperator(
     return { email: "dev-bypass@localhost" };
   }
 
-  if (!env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) {
+  if (!env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD || !env.OPERATOR_EMAIL) {
     return new Response(
-      "Cloudflare Access is not configured on this deployment (ACCESS_TEAM_DOMAIN / ACCESS_AUD).",
+      "Cloudflare Access is not configured on this deployment (ACCESS_TEAM_DOMAIN / ACCESS_AUD / OPERATOR_EMAIL).",
       { status: 503 },
     );
   }
@@ -62,6 +62,15 @@ export async function requireOperator(
     const email = typeof payload.email === "string" ? payload.email : undefined;
     if (!email)
       return new Response("Access token has no email claim", { status: 403 });
+    // Access decides who may reach this page; this decides who may act. The policy can be
+    // loosened by mistake, the secret cannot.
+    if (email.trim().toLowerCase() !== env.OPERATOR_EMAIL.trim().toLowerCase()) {
+      console.warn("Access identity is not the operator:", email);
+      return new Response(
+        "Signed in through Cloudflare Access, but this identity is not the operator of this server.",
+        { status: 403 },
+      );
+    }
     return { email };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);

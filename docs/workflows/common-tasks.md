@@ -15,7 +15,7 @@ Step-by-step checklists for recurring work.
 1. `pnpm typecheck && pnpm e2e` against a local server.
 2. `pnpm run deploy`. First deploy prints the workers.dev URL.
 3. If migrations changed: `pnpm db:migrate:remote`.
-4. If secrets changed: the operator runs `wrangler secret put <NAME>` for each one (`YAHOO_USER`, `YAHOO_APP_PASSWORD`, `SEND_ENABLED`, `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`). Never paste secret values into chat or files.
+4. If secrets changed: the operator runs `wrangler secret put <NAME>` for each one (`YAHOO_USER`, `YAHOO_APP_PASSWORD`, `SEND_ENABLED`, `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `OPERATOR_EMAIL`). Never paste secret values into chat or files.
 5. Smoke test: `curl -i https://<host>/mcp` returns 401 with `WWW-Authenticate`; `https://<host>/authorize` redirects to the Cloudflare Access login.
 
 ## Set up Cloudflare Access on /authorize (once)
@@ -25,7 +25,7 @@ Step-by-step checklists for recurring work.
 3. Application domain: `yahoo-mcp.clthrl.workers.dev`, path `authorize`. Session duration: 24 h is fine.
 4. Policy: Allow, include Emails, your address only.
 5. Copy the Application Audience (AUD) tag from the application overview.
-6. `wrangler secret put ACCESS_TEAM_DOMAIN` (value `<team>.cloudflareaccess.com`) and `wrangler secret put ACCESS_AUD`.
+6. `wrangler secret put ACCESS_TEAM_DOMAIN` (value `<team>.cloudflareaccess.com`) and `wrangler secret put ACCESS_AUD`. Then `wrangler secret put OPERATOR_EMAIL` with the one email allowed to approve clients; the consent page answers 503 until all three are set.
 
 ## Connect a client
 

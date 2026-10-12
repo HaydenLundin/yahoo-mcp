@@ -140,7 +140,7 @@ export default new OAuthProvider({
 - Consent screen shows the client's registered name + requested scopes; approve button only. (Single user; no per-scope toggles in v1. Scopes are still recorded on the grant for audit.) The grant's scopes decide which tool groups the server registers for that client (read and the aliases, draft, organize, send); a client that asked for less sees less, and send additionally needs `SEND_ENABLED`. The send group also needs `mail.read`, because reply and forward read the original.
 - Grant `props` = `{ clientId, clientName, scopes, grantedAt }` → available to every tool call for the audit log.
 
-**Secrets** (`wrangler secret put`): `YAHOO_USER`, `YAHOO_APP_PASSWORD`, `SEND_ENABLED` (`"true"|"false"`), `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`.
+**Secrets** (`wrangler secret put`): `YAHOO_USER`, `YAHOO_APP_PASSWORD`, `SEND_ENABLED` (`"true"|"false"`), `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `OPERATOR_EMAIL` (the Access token's email must equal it, case-insensitively, before the consent page or console does anything; a loosened Access policy admits nobody else).
 
 ---
 

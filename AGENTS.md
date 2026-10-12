@@ -24,7 +24,7 @@ pnpm audit:tail           # last 50 audit rows from production D1
 - Resolve special folders (Sent, Drafts, Trash, Archive, Junk) by IMAP special-use flag, never by name. Yahoo names them `Sent`, `Draft`, `Trash`, `Archive`, `Bulk`.
 - Message bodies never reach logs or the audit table. Audit digests exclude `body_text`, `body_html`, `note`.
 - Secrets never enter the repo. Local dev reads `.dev.vars` (gitignored). Production uses `wrangler secret put`.
-- `ACCESS_DEV_BYPASS=true` works only for localhost hosts. Production requires `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD`.
+- `ACCESS_DEV_BYPASS=true` works only for localhost hosts. Production requires `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, and `OPERATOR_EMAIL` (the one identity allowed on the consent page and console, whatever the Access policy says).
 - MCP is stateless: fresh `McpServer` per request, JSON responses, no Durable Objects. Send tools are registered only when `SEND_ENABLED === "true"`. Tools are registered per grant scope (`props.scopes`: mail.read, mail.draft, mail.organize, mail.send); a client that asked for fewer scopes sees fewer tools, and no tool may be registered outside its scope group; the send group also needs mail.read. Nothing expunges: a tool that deletes moves the message to Trash; never add messageDelete or EXPUNGE to a tool.
 - `pnpm deploy` is pnpm's built-in command, not our script; use `pnpm run deploy`.
 - Operator HTML lives under `/authorize/*` so one Cloudflare Access application covers it. Never add operator pages elsewhere without adding Access in front of them.

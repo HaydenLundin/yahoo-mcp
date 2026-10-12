@@ -30,7 +30,7 @@ pnpm audit:tail           # last 50 audit rows from production D1
 - `pnpm deploy` is pnpm's own built-in command and never runs our script. Always `pnpm run deploy`.
 - pnpm 10 blocks postinstall scripts; `workerd` and `esbuild` are allowlisted in `package.json` (`pnpm.onlyBuiltDependencies`). Do not remove.
 - Secrets never enter the repo or this assistant. The operator runs `wrangler secret put`. Local dev reads `.dev.vars` (gitignored); `.dev.vars.example` lists the keys.
-- `ACCESS_DEV_BYPASS=true` skips Cloudflare Access only when the request host is localhost. Production needs `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD`.
+- `ACCESS_DEV_BYPASS=true` skips Cloudflare Access only when the request host is localhost. Production needs `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, and `OPERATOR_EMAIL`; the last pins the consent page and console to one identity even if the Access policy is loosened.
 - MCP is stateless: a fresh `McpServer` per request, JSON responses, no session ids, no Durable Objects. That is what lets `SEND_ENABLED` take effect on the next request.
 - Every tool body runs inside `runTool()`: errors become stable `CODE: message` tool errors and an audit row is written in the background. Never write to D1 or catch IMAP errors ad hoc inside a tool. The one sanctioned exception is `fileCopyInSent` in `src/mcp/tools/send.ts`: once SMTP has accepted a message, a failure to file the Sent copy is reported as `saved_to_sent: false`, never as a tool error.
 - Server-side MCP clients send no `Origin` header; the `/mcp` origin check only rejects a present, non-allowlisted origin.

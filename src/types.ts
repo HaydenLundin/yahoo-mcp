@@ -20,6 +20,11 @@ export interface Env {
   /** Application Audience (AUD) tag of the Access app that guards /authorize. */
   ACCESS_AUD?: string;
   /**
+   * The one identity allowed to approve clients and use the console, compared case-insensitively
+   * to the email in the Access token. A loosened Access policy admits nobody else.
+   */
+  OPERATOR_EMAIL?: string;
+  /**
    * Local development only. Skips the Access check on /authorize, and even then
    * only when the request host is localhost. Never set this in production.
    */
