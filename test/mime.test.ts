@@ -13,6 +13,7 @@ import {
   replyThreading,
   selectBodyParts,
   splitMessageIds,
+  stripElements,
   truncateText,
 } from "../src/lib/mime";
 import {
@@ -267,5 +268,32 @@ describe("an attached message is an attachment, not a body source", () => {
       childNodes: [outerHtml, { ...attachedMessage, disposition: undefined, dispositionParameters: undefined }],
     } as unknown as MessageStructureObject;
     expect(listAttachments(unnamed)[0]).toMatchObject({ filename: "message.eml" });
+  });
+});
+
+describe("stripElements", () => {
+  it("drops the named elements with their content, case-insensitively, and leaves look-alike tags", () => {
+    expect(stripElements("a<SCRIPT type=x>bad()</script >b<style>p{}</STYLE>c", ["script", "style"])).toBe("abc");
+    expect(stripElements("<scripts>keep</scripts><s>ok</s>", ["script"])).toBe("<scripts>keep</scripts><s>ok</s>");
+  });
+
+  it("treats an unclosed element as running to the end of the input", () => {
+    expect(stripElements("before<script>never closed", ["script"])).toBe("before");
+    expect(htmlToText("x<!-- open comment y")).toBe("x");
+  });
+
+  it("stays linear on crafted input: thousands of unclosed openers finish in milliseconds", () => {
+    const hostile = "<script".repeat(5000) + "<a href='h'".repeat(2000);
+    const t0 = performance.now();
+    htmlToText(hostile);
+    htmlToText("<iframe".repeat(5000));
+    expect(performance.now() - t0).toBeLessThan(500);
+  });
+
+  it("still turns anchors into label (href) and leaves a broken anchor to the generic strip", () => {
+    expect(htmlToText('<a href="https://x.example/p">Read</a> and <a href="https://y.example">https://y.example</a>')).toBe(
+      "Read (https://x.example/p) and https://y.example",
+    );
+    expect(htmlToText('<a href="https://x.example">no close')).toBe("no close");
   });
 });

@@ -53,6 +53,8 @@ export class FakeImapFlow {
   static rejectThreadIdSearch = false;
   /** Thrown by a THREADID search when set: stands in for a dead or throttled connection. */
   static threadIdSearchError: unknown = null;
+  /** When true, a header (References) search answers `false`, the way ImapFlow reports a rejected SEARCH. */
+  static rejectHeaderSearch = false;
   /** When true, messageMove reports failure without touching anything. */
   static failMove = false;
   /** `uid:part:start` -> how many more times that body window should come back empty (a Yahoo hiccup). */
@@ -66,6 +68,7 @@ export class FakeImapFlow {
     FakeImapFlow.failConnect = null;
     FakeImapFlow.rejectThreadIdSearch = false;
     FakeImapFlow.threadIdSearchError = null;
+    FakeImapFlow.rejectHeaderSearch = false;
     FakeImapFlow.failMove = false;
     FakeImapFlow.emptyWindows = new Map();
     FakeImapFlow.lastSocket = null;
@@ -164,6 +167,7 @@ export class FakeImapFlow {
       throw new Error("BAD search");
     if (query.threadId !== undefined && FakeImapFlow.threadIdSearchError)
       throw FakeImapFlow.threadIdSearchError;
+    if (query.or !== undefined && FakeImapFlow.rejectHeaderSearch) return false;
     return this.sequenced()
       .filter(({ seq, m }) => inSeqRange(seq, query.seq) && matches(m, query))
       .map(({ m }) => m.uid)

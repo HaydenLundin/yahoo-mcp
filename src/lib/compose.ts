@@ -72,9 +72,12 @@ export function buildMessage(input: MessageInput): string {
   headers.push(["Subject", encodeHeaderText(input.subject)]);
   headers.push(["Date", formatDate(date)]);
   headers.push(["Message-ID", messageId]);
-  if (input.inReplyTo) headers.push(["In-Reply-To", input.inReplyTo]);
-  if (input.references?.length)
-    headers.push(["References", input.references.join(" ")]);
+  // Threading ids come from other people's mail; only clean ones go back on the wire.
+  const inReplyTo =
+    input.inReplyTo && isMessageId(input.inReplyTo) ? input.inReplyTo : undefined;
+  const references = capReferences((input.references ?? []).filter(isMessageId));
+  if (inReplyTo) headers.push(["In-Reply-To", inReplyTo]);
+  if (references.length) headers.push(["References", references.join(" ")]);
   headers.push(["MIME-Version", "1.0"]);
   headers.push(["X-Mailer", "yahoo-mcp"]);
 
@@ -109,7 +112,7 @@ export function buildMessage(input: MessageInput): string {
     body = [qpEncode(input.text)];
   }
 
-  const head = headers.map(([k, v]) => `${k}: ${v}`).join("\r\n");
+  const head = headers.map(([k, v]) => foldHeader(k, v)).join("\r\n");
   return `${head}\r\n\r\n${body.join("\r\n")}\r\n`;
 }
 
@@ -152,6 +155,41 @@ function quoteIfNeeded(name: string): string {
   return /[()<>[\]:;@\\,."]/.test(name)
     ? `"${name.replace(/(["\\])/g, "\\$1")}"`
     : name;
+}
+
+/** A message id we are willing to put on the wire: angle brackets, no whitespace or control characters. */
+function isMessageId(id: string): boolean {
+  return /^<[^\s<>\x00-\x1f\x7f]+>$/.test(id);
+}
+
+const MAX_REFERENCES = 20;
+
+/** RFC 5322 section 3.6.4: when a chain gets long, trim the middle and keep the root and the recent ids. */
+function capReferences(ids: string[]): string[] {
+  return ids.length <= MAX_REFERENCES
+    ? ids
+    : [ids[0], ...ids.slice(-(MAX_REFERENCES - 1))];
+}
+
+/**
+ * Fold a header at spaces so no line exceeds 78 characters (RFC 5322 section 2.2.3). Continuation
+ * lines start with one space, which unfolding keeps, so the value survives intact. A single token
+ * longer than the limit stays whole; encoded words and ids contain no spaces.
+ */
+export function foldHeader(name: string, value: string): string {
+  const limit = 78;
+  const lines: string[] = [];
+  let line = `${name}:`;
+  for (const word of value.split(" ")) {
+    if (line !== `${name}:` && line.length + 1 + word.length > limit) {
+      lines.push(line);
+      line = ` ${word}`;
+    } else {
+      line += ` ${word}`;
+    }
+  }
+  lines.push(line);
+  return lines.join("\r\n");
 }
 
 /** Plain ASCII stays as-is; anything else becomes RFC 2047 encoded words. */

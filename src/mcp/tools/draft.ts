@@ -11,12 +11,12 @@ const MAX_BODY = 200_000;
 
 const draftFields = {
   to: z
-    .array(z.string().min(3))
+    .array(z.string().min(3).max(320))
     .min(1)
     .max(50)
     .describe('Recipients: "user@example.com" or "Name <user@example.com>"'),
-  cc: z.array(z.string().min(3)).max(50).optional(),
-  bcc: z.array(z.string().min(3)).max(50).optional(),
+  cc: z.array(z.string().min(3).max(320)).max(50).optional(),
+  bcc: z.array(z.string().min(3).max(320)).max(50).optional(),
   subject: z.string().min(1).max(998),
   body_text: z.string().max(MAX_BODY).describe("Plain-text body"),
   body_html: z
