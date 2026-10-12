@@ -149,3 +149,20 @@ B9 done the same day: `OPERATOR_EMAIL` is a required secret and `requireOperator
 B2 live check done 2026-10-12: the opt-in e2e self-send now carries a Bcc to the same mailbox. The delivered copy (INBOX uid 236610, four Received hops through Yahoo's submission path) has no Bcc header; the Sent copy (uid 156743) keeps it. The spike's new `/headers` route reads raw header blocks for this kind of check.
 
 Tagged v1.0.0 on 2026-10-12 with every before-tag item done, B9 added, and the Bcc live check passed.
+
+1.0.x list done 2026-10-12 on branch `hardening-1.0.x`, opened as a pull request rather than deployed:
+
+- B4: `checkRegistration` caps registration metadata (4 KB body, 100-character name, 1 to 5 redirect URIs of 512 characters), the IPv6 rate-limit key is the /64 prefix, and `REGISTRATION_ENABLED=false` closes `/register`.
+- B3: the consent page prints the full redirect URI and warns when its host is not a known assistant.
+- B10 + B20: `audit_log.detail` (migration 0002) filled through `note()` for moves, archive, trash, and confirm_send; the cron purges rows older than 180 days.
+- B11: a thread search Yahoo rejects is `IMAP_SEARCH_FAILED`, not a one-message thread.
+- B13: GitHub Actions runs typecheck and the suite on every push and pull request.
+- B16: the spike fails closed behind `SPIKE_TOKEN`.
+- B17: `preview_urls: false`.
+- B18: `htmlToText` and the sanitiser are forward scans; 5,000 unclosed `<script` openers plus 2,000 unclosed anchors finish well under half a second in the test, where the old regexes took seconds for 20 KB.
+- B19 + F3: threading ids with whitespace or control characters are dropped, References capped at 20 keeping the root, headers folded at 78 columns, a lone CR normalised before dot-stuffing.
+- B21: `SMTP_OUTCOME_UNKNOWN` when the connection drops after the payload went out, with the message telling the model not to resend blindly.
+- F2: address strings capped at 320 characters in every tool schema.
+- B14, R2, R4 and the OVERVIEW wording: revocation takes about a minute, token and registration lifetimes written down, Yahoo's own Trash emptying noted.
+- B22 deferred: the provider derives the resource identifier from the request URL and preview URLs are now off; a fixed pin needs an origin that differs between dev and production.
+- Not in scope, as agreed: B5 (send budget), B12 (plan and WAF), R3 (token-time scope narrowing is not exposed by the provider), per-scope consent checkboxes.

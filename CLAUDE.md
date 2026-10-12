@@ -4,7 +4,7 @@ Remote MCP server (one Cloudflare Worker) exposing a single Yahoo Mail account t
 
 ## Context routing
 
-- Changing auth (OAuth provider, Cloudflare Access, consent page) -> read `ARCHITECTURE.md` section 4, then `src/auth/*` and `src/index.ts`.
+- Changing auth (OAuth provider, Cloudflare Access, consent page, registration caps) -> read `ARCHITECTURE.md` section 4, then `src/auth/*` (registration policy is `src/auth/registration.ts`) and `src/index.ts`.
 - Adding or changing a tool -> `ARCHITECTURE.md` section 5 (manifest + annotations), `src/mcp/tool.ts` (the `runTool` wrapper every tool uses), `docs/rules/coding-rules.md`.
 - IMAP or SMTP behaviour -> `ARCHITECTURE.md` section 6, `src/lib/imap.ts`; Yahoo and Workers quirks in `docs/rules/debugging-rules.md`.
 - Building outgoing mail -> `src/lib/compose.ts` (RFC 5322 + quoted-printable + RFC 2047); never hand-roll MIME elsewhere. Sending -> `src/lib/smtp.ts` (our own minimal SMTP client over node:tls; nodemailer does not connect from Workers) and `src/lib/pending.ts` (single-use confirm tokens in D1).
@@ -37,7 +37,9 @@ pnpm audit:tail           # last 50 audit rows from production D1
 - Production hostname: `https://yahoo-mcp.clthrl.workers.dev` (workers.dev subdomain `clthrl`). Cloudflare Access is scoped to `/authorize` and everything beneath it, which is why the operator console lives at `/authorize/connections`.
 - `/token` and `/register` are rate limited per IP through Workers Rate Limiting bindings (`src/lib/ratelimit.ts`); the gate is a no-op when a binding is absent, so tests and stripped configs still run.
 - Tests: `pnpm test` runs vitest in the node environment; `test/helpers/fake-imap.ts` stands in for ImapFlow via `vi.mock("imapflow")`, and `test/helpers/harness.ts` wires `buildServer()` to an in-memory MCP client so tools are exercised exactly as a client sees them. `scripts/e2e-oauth.mjs` covers the real runtime path against `wrangler dev`. Add a fixture and a test for every new tool.
-- Audit writes are awaited inside `runTool()`, never deferred with `waitUntil`, so a row exists before the client sees the result.
+- Audit writes are awaited inside `runTool()`, never deferred with `waitUntil`, so a row exists before the client sees the result. A write tool that wants its row to say what it touched calls the `note()` callback `runTool` passes to the body: counts, folder names, recipient domains, message ids only; never addresses or bodies (`audit_log.detail`, migration 0002).
+- Migrations only add columns, and `pnpm db:migrate:remote` runs before `pnpm run deploy`, so new code never writes to a column that is not there yet.
+- `REGISTRATION_ENABLED=false` closes `/register` with 403; the gate runs in `src/index.ts` before the provider, next to the rate limiter.
 - Send tools register only when `SEND_ENABLED === "true"`; locally that is `.dev.vars`, in production a secret. The e2e script never calls `confirm_send`; a real send needs the operator's explicit go-ahead.
 - Tools are registered per grant: `buildServer` reads `props.scopes` (`mail.read`, `mail.draft`, `mail.organize`, `mail.send`). A client that asked for fewer scopes sees fewer tools; never register a tool outside its scope group. The send group also needs `mail.read`.
 - Nothing expunges. A tool that "deletes" moves the message to Trash (`delete_draft`, and the old version in `update_draft`); never add `messageDelete` or EXPUNGE to a tool.

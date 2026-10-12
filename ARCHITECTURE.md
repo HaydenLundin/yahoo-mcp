@@ -136,11 +136,11 @@ export default new OAuthProvider({
 });
 ```
 - Access tokens opaque, stored hashed in KV by the library.
-- Refresh tokens rotate on use.
+- Refresh tokens rotate on use. Lifetimes are the provider defaults: access tokens 1 hour, refresh tokens 30 days from issue (a client idle for a month signs in again), client registrations 90 days (a dormant client re-registers, then re-consents). None of it needs operator action.
 - Consent screen shows the client's registered name + requested scopes; approve button only. (Single user; no per-scope toggles in v1. Scopes are still recorded on the grant for audit.) The grant's scopes decide which tool groups the server registers for that client (read and the aliases, draft, organize, send); a client that asked for less sees less, and send additionally needs `SEND_ENABLED`. The send group also needs `mail.read`, because reply and forward read the original.
 - Grant `props` = `{ clientId, clientName, scopes, grantedAt }` → available to every tool call for the audit log.
 
-**Secrets** (`wrangler secret put`): `YAHOO_USER`, `YAHOO_APP_PASSWORD`, `SEND_ENABLED` (`"true"|"false"`), `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `OPERATOR_EMAIL` (the Access token's email must equal it, case-insensitively, before the consent page or console does anything; a loosened Access policy admits nobody else).
+**Secrets** (`wrangler secret put`): `YAHOO_USER`, `YAHOO_APP_PASSWORD`, `SEND_ENABLED` (`"true"|"false"`), `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `OPERATOR_EMAIL` (the Access token's email must equal it, case-insensitively, before the consent page or console does anything; a loosened Access policy admits nobody else), `REGISTRATION_ENABLED` (`"false"` closes `/register` with 403 once every client is onboarded; unset or anything else keeps it open).
 
 ---
 
@@ -259,10 +259,11 @@ CREATE TABLE audit_log (
   tool        TEXT NOT NULL,
   args_digest TEXT NOT NULL,          -- sha256 of canonical args (no bodies)
   uids        TEXT,                   -- JSON array when applicable
-  outcome     TEXT NOT NULL CHECK (outcome IN ('ok','error','denied'))
+  outcome     TEXT NOT NULL CHECK (outcome IN ('ok','error','denied')),
+  detail      TEXT                   -- JSON from the tool's note(): counts, folders, ids; never addresses or bodies (migration 0002)
 );
 ```
-Audit every tool call in `draft`, `organize`, `send`. Read calls are logged at `tool` level only (no args) to keep the table small. A cron trigger (`*/10 * * * *`) purges expired `pending_sends`.
+Audit every tool call in `draft`, `organize`, `send`. Read calls are logged at `tool` level only (no args) to keep the table small. A write tool fills `detail` through the `note()` callback `runTool` hands it: what the action touched (folders and a count for moves; recipient counts, domains, and the message id for a send), so a row for an irreversible action says what happened without holding an address or a body. A cron trigger (`*/10 * * * *`) purges expired `pending_sends` and audit rows older than 180 days (`AUDIT_RETENTION_DAYS`). D1 Time Travel keeps the previous 7 days of database state on the Free plan (30 on Paid) if a purge ever needs undoing.
 
 ---
 
@@ -329,7 +330,11 @@ Tests run in plain vitest rather than `@cloudflare/vitest-pool-workers`: the too
 - Prompt injection is the primary threat model (email bodies are attacker-controlled input read by the model). Mitigations: send is two-phase (a single-use confirm token bound to the client; the human approval itself is enforced by the client's tool prompt, since `confirm_send` is annotated destructive); no attachment content; no permanent delete; `SEND_ENABLED` kill switch; audit log ties every write to a `client_id`.
 - A present `Origin` on `/mcp` must match our origin or the allowlist; server-side clients send none and are accepted.
 - Consent page is behind Cloudflare Access; a stolen OAuth client cannot complete a grant without the operator's identity.
-- Rate limit `/token` and `/register` (Workers Rate Limiting bindings, free): 30 and 5 requests per minute per connecting IP, HTTP 429 with `Retry-After` beyond that (`src/lib/ratelimit.ts`). Both are the only endpoints an anonymous caller can POST to.
+- Rate limit `/token` and `/register` (Workers Rate Limiting bindings, free): 30 and 5 requests per minute per connecting IP, HTTP 429 with `Retry-After` beyond that (`src/lib/ratelimit.ts`). Both are the only endpoints an anonymous caller can POST to. The key for an IPv6 caller is its /64 prefix, so one allocation cannot rotate through addresses to dodge the limit.
+- `/register` metadata is capped by `checkRegistration` (`src/auth/registration.ts`): body at most 4 KB, `client_name` at most 100 characters, 1 to 5 `redirect_uris` of at most 512 characters each, because KV keeps whatever a stranger registers for 90 days. `REGISTRATION_ENABLED=false` closes the endpoint outright once every client is onboarded; the gate runs before the provider, like the rate limiter.
+- The consent page prints the client's full redirect URI and warns when its host is not one of the known assistants (claude.ai, claude.com, anthropic.com, chatgpt.com, openai.com, localhost). A client anyone can register can choose its name; it cannot fake where the authorization code is sent.
+- `htmlToText` and the HTML sanitiser walk tags in one forward pass (`stripElements`, `replaceTags`, `linkifyAnchors` in `src/lib/mime.ts`). The regexes they replaced went cubic on crafted markup made of unclosed openers, and the Worker's CPU budget is milliseconds. On the way out, `buildMessage` folds headers at 78 columns, drops threading ids that carry whitespace or control characters, and caps References at 20 ids.
+- The protected-resource identifier is derived by the provider from the request URL. Preview URLs are disabled (`preview_urls: false`), so the only hostnames that can appear are the workers.dev name and any custom domain; pinning it to one configured origin is deferred because dev and production would need different values.
 - Operator console at `/authorize/connections` (covered by the same Access application as `/authorize`): lists grants with last audited activity and revokes one client's tokens. CSRF-guarded like the consent form.
 - Operator pages send a Content-Security-Policy with no scripts and `frame-ancestors 'none'`; `form-action` and a cross-origin-opener policy are deliberately omitted because the consent POST redirects to the client's origin and claude.ai completes OAuth in a popup that needs its opener.
 
@@ -402,6 +407,7 @@ Every tool error is returned as `CODE: message` in a single text content item wi
 | `SMTP_RECIPIENT_REJECTED` | every recipient was refused | bad address, relaying denied |
 | `SMTP_MESSAGE_REJECTED` | Yahoo refused the sender or the message data | policy, size |
 | `SMTP_CONNECT_FAILED` | could not reach SMTP, or it closed or timed out | network |
+| `SMTP_OUTCOME_UNKNOWN` | the connection dropped after the whole message was transmitted and before Yahoo's reply | Yahoo may have delivered it; check Sent or ask the recipient before resending |
 | `SMTP_FAILED` | any other SMTP reply | unexpected server behaviour |
 | `CONFIRM_TOKEN_INVALID` | unknown, used, cancelled, or another client's token | model retried a confirm |
 | `CONFIRM_TOKEN_EXPIRED` | the five-minute window passed | slow confirmation |

@@ -103,6 +103,14 @@ Then came the part worth remembering. The write-up blamed workerd's zlib inflate
 
 **Yahoo reports INBOX as exactly 10,000 messages.** Three runs, same number, while new mail kept arriving. Probably a cap on what the server exposes. Flagged for milestone 3 so search totals are not trusted blindly.
 
+### The 1.0.x hardening pass: regexes, fail-closed, and saying what you did
+
+Three lessons from the follow-up list after the adversarial review. First, a regex over hostile text is a tiny interpreter you did not benchmark. The HTML-to-text helper used patterns like `<(script|style)\b[\s\S]*?<\/\1>`, which read naturally and worked on every real email. Hand it 20 KB of `<script<script<script` with no closing tag and the engine retries from every position with a lazy body and a backreference: seconds of CPU on a platform that budgets milliseconds. The fix is dull on purpose: walk the string once with `indexOf`, and keep a test that feeds the hostile input and asserts a time limit, so nobody reintroduces a clever pattern later.
+
+Second, anything that can touch the real mailbox fails closed. The spike worker exists for experiments, but an experiment that logs into your email with no authentication is a liability the moment it is deployed by mistake. One header check with no default means the worst case is a 403.
+
+Third, an audit row for an irreversible action should say what happened, not only that it happened. A `confirm_send` row that records three recipients across two domains and a message id answers next month's question without storing a single address. The `note()` callback is how a tool adds that, and the rule about what may go in it (counts, folders, domains, ids) is written next to the function.
+
 ## How good engineers work, as seen in this project
 
 - Decide the one thing that could invalidate the design, and test that first.

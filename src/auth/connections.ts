@@ -84,7 +84,7 @@ export function registerConnectionRoutes(app: Hono<{ Bindings: Env }>): void {
           <p class="muted">
             Signed in as ${operator.email}. Each row is one OAuth grant: an AI
             client allowed to use this mailbox. Revoking invalidates its access
-            and refresh tokens immediately. Activity counts come from the audit
+            and refresh tokens within about a minute. Activity counts come from the audit
             log.
           </p>
           ${notice} ${table}`,

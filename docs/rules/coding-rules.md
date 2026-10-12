@@ -18,10 +18,13 @@ Project-specific conventions. General style follows the global instructions.
 - UID everywhere (`uid: true` on fetch, search, move, flags). Never sequence numbers.
 - Resolve special folders by special-use flag via `list()`; never hardcode `Sent`, `Draft`, `Trash`, `Archive`, `Bulk`.
 - Cap bodies at 50 KB in responses and say when truncated. Prefer `text/plain`; sanitise HTML to text when that is all there is.
+- Never run a regex with a lazy body (`[\s\S]*?`), a backreference, or an unbounded negated class over message HTML; crafted input makes those quadratic or worse. Use the forward scanners in `src/lib/mime.ts` (`stripElements`, `replaceTags`, `linkifyAnchors`) and add a timing test for new ones.
+- Outgoing headers go through `buildMessage`, which folds them and filters threading ids; never append a header line by hand.
 
 ## Data and logs
 
 - Message bodies never reach `console.*`, the audit table, or error messages. `digestArgs` strips `body_text`, `body_html`, `note`.
+- The audit row's `detail` (filled through the `note()` callback `runTool` passes to a tool body) holds counts, folder names, recipient domains, and message ids only.
 - New D1 tables and columns go in a new numbered file under `migrations/`. Never edit an applied migration.
 
 ## Auth

@@ -8,6 +8,8 @@ import { ImapFlow } from "imapflow";
 interface Env {
   YAHOO_USER?: string;
   YAHOO_APP_PASSWORD?: string;
+  /** Every route but /ping needs this value in an x-spike-token header; unset means nothing works. */
+  SPIKE_TOKEN?: string;
 }
 interface LogEntry {
   level: string;
@@ -390,6 +392,10 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname === "/ping") return Response.json({ ok: true, runtime: navigator.userAgent ?? null });
+    // This worker logs into the real mailbox on request. It fails closed: no token, no probes.
+    if (!env.SPIKE_TOKEN || req.headers.get("x-spike-token") !== env.SPIKE_TOKEN) {
+      return new Response("spike: set SPIKE_TOKEN and send it as the x-spike-token header", { status: 403 });
+    }
     // Experiment 1: same stalled search, but with the pipe's pause() disabled on imapflow's socket
     // (?patch=1). If it completes, Node-style backpressure is what stops the Workers socket shim.
     // Experiment 3: does setImmediate ever fire under workerd? imapflow awaits it every 10 chunks.
