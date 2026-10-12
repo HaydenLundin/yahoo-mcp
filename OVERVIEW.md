@@ -129,4 +129,4 @@ Each client gets its own token. Revoking one (from the Worker's KV, or by rotati
 
 ## Status
 
-All seven milestones are built and deployed; version 1.0.0-rc.2 is in operator trial ahead of 1.0. Details in `ARCHITECTURE.md`.
+Version 1.0.0, released 2026-10-12 after an adversarial review and a live Bcc check. Details in `ARCHITECTURE.md`; review record in `docs/reviews/`.
