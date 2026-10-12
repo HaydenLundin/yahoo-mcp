@@ -125,3 +125,21 @@ Before tagging, in order:
 In 1.0.x: B4 (registration callback capping metadata, limiter keyed on /64, DCR toggle), B3 (bold redirect host, unverified-client banner), B5 hardening, B9 (OPERATOR_EMAIL), B10 (audit columns), B11, B12 (plan or WAF), B13 (CI), B16 (move spike/ out), B17 (preview_urls false), B18 (linear HTML stripping with an input cap), B19, B20 (audit purge), B21 (SMTP_OUTCOME_UNKNOWN), B22/R3 (resource binding, token-time scope), F2 (address length cap), F3 (header folding).
 
 Docs only: B14 wording, B15 drift, B20 retention figure, R2 lifecycle paragraph, R4 Trash retention after verifying.
+
+---
+
+## Outcome (2026-10-12)
+
+Before-tag items 1 to 8 applied and verified (167 unit tests, live e2e PASS, deployed as Worker version e17c0770-a8cc-4387-accc-22a99768f60c, tagged v1.0.0-rc.2):
+
+- B1 + R1: no tool expunges any more. delete_draft moves the draft to Trash and reports trash_folder and trash_uid; update_draft moves the superseded version to Trash and reports old_version_in. The `\Draft` flag requirement the Referee suggested was tried and dropped: Yahoo does not keep the flag on an appended draft, so our own create_draft output failed it in the first live run. With moves only, nothing can be lost either way. Regression test: a message moved into Drafts and then "deleted" ends in Trash with its subject intact, and no `delete:` command is ever issued.
+- B2: confirm_send hands SMTP a copy with the Bcc header removed (folded continuations included); Bcc addresses still go in RCPT TO; the Sent copy keeps the header. Unit tests at both the builder and the tool level. The live Bcc check (To one own address, Bcc another, with SEND_ENABLED on) remains for the operator.
+- B7: the send group requires mail.read as well as mail.send.
+- B6: body_html is part of the preview and the stored row when supplied.
+- B8: downloadText reports whether the part was fully received; readBody marks a byte-capped body truncated and appends a marker; tested with a 300 KB markup-heavy part.
+- F1: message/rfc822 is a leaf attachment, listed by filename or as message.eml, never descended for a body.
+- Docs: OVERVIEW approval paragraph and reachability line, ARCHITECTURE approval mitigation, Origin rule, nodemailer mentions, draft rows, annotation table, error table, scope sentence; coding-rules scope and no-expunge rules; CLAUDE.md and AGENTS.md no-expunge rule; FORHAYDEN lesson.
+- F4: @modelcontextprotocol/sdk 1.32.1, plus imapflow 2.4.0, hono 4.13.13, workers-oauth-provider 0.10.4 via pnpm update; pnpm audit clean.
+- Operator checks (item 9): spike worker not deployed (404); production secrets are ACCESS_AUD, ACCESS_TEAM_DOMAIN, SEND_ENABLED, YAHOO_APP_PASSWORD, YAHOO_USER (no ACCESS_DEV_BYPASS); the Access policy allowing exactly one email is the operator's to confirm.
+
+Not done, by design: the 1.0.0 tag itself (operator decision after the Bcc live check), and the 1.0.x list.
