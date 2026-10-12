@@ -1,5 +1,6 @@
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { authApp } from "./auth/consent";
+import { purgeOldAudit } from "./lib/audit";
 import { purgeExpiredPending } from "./lib/pending";
 import { rateLimitGate } from "./lib/ratelimit";
 import { mcpApp } from "./mcp/handler";
@@ -42,5 +43,6 @@ export default {
   scheduled(_event, env, ctx) {
     ctx.waitUntil(provider.purgeExpiredData(env, { batchSize: 100 }));
     ctx.waitUntil(purgeExpiredPending(env));
+    ctx.waitUntil(purgeOldAudit(env));
   },
 } satisfies ExportedHandler<Env>;

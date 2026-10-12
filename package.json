@@ -11,7 +11,7 @@
     "e2e": "node scripts/e2e-oauth.mjs",
     "db:migrate:local": "wrangler d1 migrations apply yahoo_mcp --local",
     "db:migrate:remote": "wrangler d1 migrations apply yahoo_mcp --remote",
-    "audit:tail": "wrangler d1 execute yahoo_mcp --remote --command \"SELECT ts, client_name, tool, uids, outcome FROM audit_log ORDER BY ts DESC LIMIT 50\"",
+    "audit:tail": "wrangler d1 execute yahoo_mcp --remote --command \"SELECT ts, client_name, tool, uids, outcome, detail FROM audit_log ORDER BY ts DESC LIMIT 50\"",
     "spike:dev": "wrangler dev -c spike/wrangler.jsonc",
     "spike:remote": "wrangler dev -c spike/wrangler.jsonc --remote",
     "test": "vitest run",

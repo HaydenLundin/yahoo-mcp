@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { digestArgs } from "../src/lib/audit";
+import { AUDIT_RETENTION_DAYS, digestArgs, purgeOldAudit } from "../src/lib/audit";
+import { FakeD1, makeEnv } from "./helpers/harness";
 import { normalizeError, ToolError } from "../src/lib/errors";
 
 describe("digestArgs", () => {
@@ -69,5 +70,29 @@ describe("normalizeError", () => {
   it("falls back to INTERNAL", () => {
     expect(normalizeError(new Error("boom")).code).toBe("INTERNAL");
     expect(normalizeError("weird").code).toBe("INTERNAL");
+  });
+});
+
+describe("purgeOldAudit", () => {
+  it("removes rows older than the retention window and keeps the rest", async () => {
+    const db = new FakeD1();
+    const day = 86_400_000;
+    const row = (ts: number) => ({
+      ts,
+      client_id: "c",
+      client_name: "C",
+      tool: "move_messages",
+      args_digest: "",
+      uids: null,
+      outcome: "ok",
+      detail: null,
+    });
+    db.rows = [
+      row(Date.now() - (AUDIT_RETENTION_DAYS + 1) * day),
+      row(Date.now() - (AUDIT_RETENTION_DAYS - 1) * day),
+      row(Date.now()),
+    ];
+    expect(await purgeOldAudit(makeEnv(db))).toBe(1);
+    expect(db.rows).toHaveLength(2);
   });
 });

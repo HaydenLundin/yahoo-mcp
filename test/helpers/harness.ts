@@ -12,6 +12,8 @@ export interface AuditRow {
   args_digest: string;
   uids: string | null;
   outcome: string;
+  /** JSON written by a tool's note(); absent on rows older than migration 0002. */
+  detail?: string | null;
 }
 
 export interface PendingRowRecord {
@@ -47,7 +49,7 @@ export class FakeD1 {
         throw new Error("D1_ERROR: simulated failure");
       }
       if (sql.startsWith("INSERT INTO audit_log")) {
-        const [ts, client_id, client_name, tool, args_digest, uids, outcome] =
+        const [ts, client_id, client_name, tool, args_digest, uids, outcome, detail] =
           values as [
             number,
             string,
@@ -56,6 +58,7 @@ export class FakeD1 {
             string,
             string | null,
             string,
+            string | null,
           ];
         this.rows.push({
           ts,
@@ -65,6 +68,7 @@ export class FakeD1 {
           args_digest,
           uids,
           outcome,
+          detail: detail ?? null,
         });
         return { changes: 1, first: null, results: [] };
       }
@@ -136,6 +140,11 @@ export class FakeD1 {
           first: null,
           results: [],
         };
+      }
+      if (sql.startsWith("DELETE FROM audit_log WHERE ts < ?1")) {
+        const before = this.rows.length;
+        this.rows = this.rows.filter((r) => r.ts >= (values[0] as number));
+        return { changes: before - this.rows.length, first: null, results: [] };
       }
       if (sql.startsWith("DELETE FROM pending_sends WHERE expires_at < ?1")) {
         let n = 0;

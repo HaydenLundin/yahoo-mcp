@@ -259,7 +259,7 @@ export function registerSendTools(server: McpServer, deps: ToolDeps): void {
       annotations: CONFIRM,
     },
     (args) =>
-      runTool(deps, { name: "confirm_send", kind: "write", args }, async () => {
+      runTool(deps, { name: "confirm_send", kind: "write", args }, async (note) => {
         const taken = await takePending(
           deps.env,
           args.confirm_token,
@@ -292,6 +292,15 @@ export function registerSendTools(server: McpServer, deps: ToolDeps): void {
           { from: self, to: rcpts },
           withoutBcc(mime),
         );
+        note({
+          to: preview.to.length,
+          cc: preview.cc.length,
+          bcc: preview.bcc.length,
+          domains: [...new Set(rcpts.map((a) => a.slice(a.lastIndexOf("@") + 1).toLowerCase()))].sort(),
+          message_id: result.messageId,
+          accepted: result.accepted.length,
+          rejected: result.rejected.length,
+        });
         // Yahoo does not file SMTP sends into Sent on its own.
         const savedToSent = await fileCopyInSent(ctx, mime);
         return {
