@@ -29,6 +29,8 @@ export interface Env {
    * only when the request host is localhost. Never set this in production.
    */
   ACCESS_DEV_BYPASS?: string;
+  /** "false" closes /register once every client is onboarded; anything else keeps dynamic registration open. */
+  REGISTRATION_ENABLED?: string;
   /** Comma-separated browser origins allowed to call /mcp besides our own (e.g. MCP Inspector). */
   ALLOWED_ORIGINS?: string;
   /** "true" forwards imapflow warn/error log entries (summarised, no protocol frames) to the Worker log. */

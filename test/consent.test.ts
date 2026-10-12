@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authApp } from "../src/auth/consent";
+import { authApp, isKnownRedirectHost } from "../src/auth/consent";
 import type { Env } from "../src/types";
 import { FakeD1, makeEnv } from "./helpers/harness";
 
@@ -97,5 +97,49 @@ describe("consent page error paths", () => {
       env,
     );
     expect(res.status).toBe(500);
+  });
+});
+
+describe("consent page redirect warning", () => {
+  it("recognises the assistants this server is built for, and nothing that merely resembles them", () => {
+    expect(isKnownRedirectHost("claude.ai")).toBe(true);
+    expect(isKnownRedirectHost("api.claude.com")).toBe(true);
+    expect(isKnownRedirectHost("chatgpt.com")).toBe(true);
+    expect(isKnownRedirectHost("localhost:3334")).toBe(true);
+    expect(isKnownRedirectHost("claude.ai.evil.example")).toBe(false);
+    expect(isKnownRedirectHost("notclaude.ai")).toBe(false);
+    expect(isKnownRedirectHost("evil.example")).toBe(false);
+  });
+
+  const page = async (redirectUri: string) => {
+    const env = envWith({
+      parseAuthRequest: async () => ({
+        clientId: "c1",
+        redirectUri,
+        scope: ["mail.read"],
+        state: "s",
+        responseType: "code",
+      }),
+      lookupClient: async () => ({ clientId: "c1", clientName: "Some client" }),
+    });
+    const res = await authApp.request(
+      "http://localhost/authorize?client_id=c1",
+      {},
+      env,
+    );
+    expect(res.status).toBe(200);
+    return res.text();
+  };
+
+  it("shows the full return address and warns when it is not a known assistant", async () => {
+    const body = await page("https://evil.example/collect?x=1");
+    expect(body).toContain("https://evil.example/collect?x=1");
+    expect(body).toContain("Unrecognised client");
+  });
+
+  it("does not warn about a known assistant", async () => {
+    const body = await page("https://claude.ai/api/mcp/auth_callback");
+    expect(body).toContain("https://claude.ai/api/mcp/auth_callback");
+    expect(body).not.toContain("Unrecognised client");
   });
 });

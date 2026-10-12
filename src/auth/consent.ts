@@ -131,6 +131,22 @@ authApp.on(["GET", "POST"], "/authorize", async (c) => {
 
 registerConnectionRoutes(authApp);
 
+/** Return addresses of the AI assistants this server is built for; anything else gets a warning on the consent page. */
+const KNOWN_REDIRECT_HOSTS = [
+  "claude.ai",
+  "claude.com",
+  "anthropic.com",
+  "chatgpt.com",
+  "openai.com",
+  "localhost",
+  "127.0.0.1",
+];
+
+export function isKnownRedirectHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/:\d+$/, "");
+  return KNOWN_REDIRECT_HOSTS.some((k) => h === k || h.endsWith(`.${k}`));
+}
+
 /** Single operator, no per-scope toggles: grant what was asked (filtered to known scopes), or everything. */
 function resolveScopes(requested: string[]): Scope[] {
   const known = requested.filter((s): s is Scope =>
@@ -203,7 +219,17 @@ function consentPage({
   sendEnabled,
 }: ConsentView) {
   const name = client.clientName ?? client.clientId;
-  const redirectHost = new URL(authReq.redirectUri).host;
+  const redirect = new URL(authReq.redirectUri);
+  // The one thing an attacker-registered client cannot fake is where the code is sent.
+  const warning = isKnownRedirectHost(redirect.host)
+    ? ""
+    : html`<p class="warn">
+        <strong>Unrecognised client.</strong> Its return address,
+        <code>${redirect.host}</code>, is not one of the known AI assistants.
+        Allow it only if you created this client yourself. Someone who
+        registered a client and sent you this link would get full access to
+        the mailbox.
+      </p>`;
   const items = granted
     .map(
       (s) =>
@@ -224,8 +250,9 @@ function consentPage({
     html`<h1>Allow <em>${name}</em> to use your Yahoo Mail?</h1>
       <p class="muted">
         Signed in as ${operator}. After approval the client is sent back to
-        <code>${redirectHost}</code>.
+        <code>${authReq.redirectUri}</code>.
       </p>
+      ${warning}
       <p>The client will be able to:</p>
       <ul>
         ${raw(items)}

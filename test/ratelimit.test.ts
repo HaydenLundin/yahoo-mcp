@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rateLimitGate } from "../src/lib/ratelimit";
+import { rateLimitGate, rateLimitKey } from "../src/lib/ratelimit";
 import { FakeD1, makeEnv } from "./helpers/harness";
 
 function limiter(blockedKeys: string[]) {
@@ -60,5 +60,21 @@ describe("rateLimitGate", () => {
     const env = makeEnv(new FakeD1());
     expect(await rateLimitGate(post("/token", "1.2.3.4"), env)).toBeNull();
     expect(await rateLimitGate(post("/register"), env)).toBeNull();
+  });
+});
+
+describe("rateLimitKey", () => {
+  it("keeps IPv4 addresses whole and buckets IPv6 by /64", () => {
+    expect(rateLimitKey("203.0.113.9")).toBe("203.0.113.9");
+    expect(rateLimitKey("2001:db8:85a3:8d3:1319:8a2e:370:7348")).toBe(
+      "2001:db8:85a3:8d3::/64",
+    );
+    expect(rateLimitKey("2001:db8::1")).toBe("2001:db8:0:0::/64");
+    expect(rateLimitKey("2001:db8::ffff:1")).toBe("2001:db8:0:0::/64");
+  });
+
+  it("falls back sensibly on a missing or malformed address", () => {
+    expect(rateLimitKey(null)).toBe("unknown");
+    expect(rateLimitKey("not:an:address")).toBe("not:an:address");
   });
 });
