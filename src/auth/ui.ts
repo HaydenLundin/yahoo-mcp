@@ -59,6 +59,11 @@ export function page(
             border-radius: 8px;
             padding: 0.6rem 0.8rem;
           }
+          .warn {
+            background: rgb(220 38 38 / 0.12);
+            border-radius: 8px;
+            padding: 0.6rem 0.8rem;
+          }
           .actions {
             display: flex;
             gap: 0.75rem;

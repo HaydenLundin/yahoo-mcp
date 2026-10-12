@@ -1,5 +1,6 @@
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { authApp } from "./auth/consent";
+import { checkRegistration, registrationClosed } from "./auth/registration";
 import { purgeOldAudit } from "./lib/audit";
 import { purgeExpiredPending } from "./lib/pending";
 import { rateLimitGate } from "./lib/ratelimit";
@@ -24,6 +25,7 @@ const provider = new OAuthProvider<Env>({
   tokenEndpoint: "/token",
   // DCR stays on for client compatibility; CIMD is the MCP 2026-07-28 preferred path.
   clientRegistrationEndpoint: "/register",
+  clientRegistrationCallback: checkRegistration,
   clientIdMetadataDocumentEnabled: true,
   scopesSupported: [...SCOPES],
   resourceMetadata: {
@@ -38,6 +40,8 @@ export default {
     // Per-IP throttle on the two endpoints anyone on the internet can POST to.
     const limited = await rateLimitGate(request, env);
     if (limited) return limited;
+    const closed = registrationClosed(request, env);
+    if (closed) return closed;
     return provider.fetch(request, env, ctx);
   },
   scheduled(_event, env, ctx) {
