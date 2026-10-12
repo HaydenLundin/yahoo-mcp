@@ -322,7 +322,8 @@ if (toolNames.includes("send_message")) {
 }
 
 // 5e. OPT-IN real send to self. Runs only with E2E_SEND_SELF=1 and only against a server whose
-// YAHOO_USER we can read from .dev.vars. Sends exactly one message, from the account to itself.
+// YAHOO_USER we can read from .dev.vars. Sends exactly one message, from the account to itself,
+// with the same address in Bcc so the wire copy exercises the Bcc stripping.
 if (process.env.E2E_SEND_SELF === "1" && toolNames.includes("send_message")) {
   const { readFileSync } = await import("node:fs");
   const selfAddr = readFileSync(new URL("../.dev.vars", import.meta.url), "utf8")
@@ -331,10 +332,12 @@ if (process.env.E2E_SEND_SELF === "1" && toolNames.includes("send_message")) {
     .find(Boolean);
   if (!selfAddr) fail("YAHOO_USER not found in .dev.vars");
   const subject = `yahoo-mcp test send ${stamp}`;
+  // To self and Bcc self: one mailbox, one RCPT TO, and the delivered copy must carry no Bcc header.
   const prepared = await tool("send_message", {
     to: [selfAddr],
+    bcc: [selfAddr],
     subject,
-    body_text: "This is a one-time test send from yahoo-mcp (milestone 5). Safe to delete.",
+    body_text: "This is a one-time test send from yahoo-mcp with a Bcc to self. Safe to delete.",
   });
   const confirmed = await tool("confirm_send", { confirm_token: prepared.data.confirm_token });
   if (confirmed.data.sent !== true || confirmed.data.accepted !== 1) fail(`confirm_send shape: ${JSON.stringify(confirmed.data)}`);

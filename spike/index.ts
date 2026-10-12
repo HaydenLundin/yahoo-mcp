@@ -476,6 +476,25 @@ export default {
       return Response.json({ ...res, ms: Date.now() - t0, log_entries: dlog.length, protocol, tail: dlog.slice(-40) });
     }
 
+    if (url.pathname === "/headers") {
+      // Raw RFC 5322 header block of one message, for checking what actually arrived (e.g. that no
+      // Bcc header crossed the wire). ?folder=INBOX&uid=N, or uid=last for the newest message.
+      const folder = url.searchParams.get("folder") ?? "INBOX";
+      const uidParam = url.searchParams.get("uid") ?? "last";
+      const hlog: LogEntry[] = [];
+      const res = await session(env, hlog, async (c) => {
+        await c.mailboxOpen(folder);
+        const exists = c.mailbox && typeof c.mailbox === "object" ? c.mailbox.exists : 0;
+        const byUid = uidParam !== "last";
+        const target = byUid ? uidParam : String(Math.max(1, exists));
+        const msg = await c.fetchOne(target, { uid: true, envelope: true, headers: true }, { uid: byUid });
+        if (!msg) return { failed: "no such message" };
+        const headers = msg.headers ? Buffer.from(msg.headers).toString("utf8") : "";
+        return { folder, uid: msg.uid, subject: msg.envelope?.subject ?? null, headers };
+      });
+      return Response.json({ ...res, log: hlog.slice(0, 5) });
+    }
+
     if (url.pathname === "/ranged") {
       // Mirror of src/lib/imap.ts downloadText: fixed-size BODY.PEEK[part]<start.len> windows until a
       // short one. Reports every raw window length so a window that comes back short can be told apart

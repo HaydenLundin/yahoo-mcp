@@ -145,3 +145,5 @@ Before-tag items 1 to 8 applied and verified (167 unit tests, live e2e PASS, dep
 Not done, by design: the 1.0.0 tag itself (operator decision after the Bcc live check), and the 1.0.x list.
 
 B9 done the same day: `OPERATOR_EMAIL` is a required secret and `requireOperator` refuses any Access identity that does not match it, case-insensitively, with a 403 that names neither address. Covered by unit tests.
+
+B2 live check done 2026-10-12: the opt-in e2e self-send now carries a Bcc to the same mailbox. The delivered copy (INBOX uid 236610, four Received hops through Yahoo's submission path) has no Bcc header; the Sent copy (uid 156743) keeps it. The spike's new `/headers` route reads raw header blocks for this kind of check.
