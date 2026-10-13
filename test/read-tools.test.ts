@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeImapFlow } from "./helpers/fake-imap";
-import { bigFolder, yahooFolders } from "./helpers/fixtures";
+import {
+  bigFolder,
+  MSG_MIXED,
+  MSG_PLAIN,
+  MSG_REPLY,
+  senderMix,
+  yahooFolders,
+} from "./helpers/fixtures";
 import { IMAP_CHUNK_BYTES } from "../src/lib/imap";
 import { startHarness, type Harness } from "./helpers/harness";
 import type { FakeFolder } from "./helpers/fake-imap";
@@ -31,29 +38,80 @@ describe("tools/list", () => {
   it("exposes the read tools as read-only and no send tools", async () => {
     const { tools } = await h.client.listTools();
     const names = tools.map((t) => t.name);
-    const readTools = ["get_message", "get_thread", "list_drafts", "list_folders", "search_messages"];
+    const readTools = [
+      "get_message",
+      "get_thread",
+      "list_drafts",
+      "list_folders",
+      "search_messages",
+      "top_senders",
+    ];
     for (const n of readTools) expect(names).toContain(n);
     for (const t of tools.filter((t) => readTools.includes(t.name))) {
       expect(t.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false, openWorldHint: false });
     }
-    expect(names.some((n) => n.includes("send"))).toBe(false);
+    // top_senders is a read tool; the send group is the five phase-1/phase-2 tools.
+    expect(
+      names.some((n) =>
+        /^(send_message|reply_message|forward_message|confirm_send|cancel_send)$/.test(
+          n,
+        ),
+      ),
+    ).toBe(false);
   });
 });
 
 describe("list_folders", () => {
-  it("maps Yahoo's odd folder names to special-use roles by flag, not by name", async () => {
+  it("maps Yahoo's odd folder names to special-use roles by flag, not by name, with counts from one LIST", async () => {
     const { data } = await h.call("list_folders");
     expect(data).toEqual({
       folders: [
-        { path: "INBOX", delimiter: "/", special_use: "inbox" },
-        { path: "Sent", delimiter: "/", special_use: "sent" },
-        { path: "Draft", delimiter: "/", special_use: "drafts" },
-        { path: "Archive", delimiter: "/", special_use: "archive" },
-        { path: "Bulk", delimiter: "/", special_use: "junk" },
-        { path: "Trash", delimiter: "/", special_use: "trash" },
+        {
+          path: "INBOX",
+          delimiter: "/",
+          special_use: "inbox",
+          messages: 4,
+          unread: 2,
+        },
+        {
+          path: "Sent",
+          delimiter: "/",
+          special_use: "sent",
+          messages: 0,
+          unread: 0,
+        },
+        {
+          path: "Draft",
+          delimiter: "/",
+          special_use: "drafts",
+          messages: 2,
+          unread: 2,
+        },
+        {
+          path: "Archive",
+          delimiter: "/",
+          special_use: "archive",
+          messages: 1,
+          unread: 0,
+        },
+        {
+          path: "Bulk",
+          delimiter: "/",
+          special_use: "junk",
+          messages: 0,
+          unread: 0,
+        },
+        {
+          path: "Trash",
+          delimiter: "/",
+          special_use: "trash",
+          messages: 0,
+          unread: 0,
+        },
       ],
     });
-    expect(FakeImapFlow.calls).toEqual(["connect", "list", "logout"]);
+    // Counts arrive with the listing (LIST-STATUS); no folder is selected to count it.
+    expect(FakeImapFlow.calls).toEqual(["connect", "list:status", "logout"]);
   });
 });
 
@@ -512,5 +570,268 @@ describe("a body cut by the byte cap is reported as truncated", () => {
     h = await startHarness();
     const { data } = await h.call("get_message", { uid: 5001 });
     expect((data as { truncated: boolean }).truncated).toBe(false);
+  });
+});
+
+describe("search_messages across folders", () => {
+  it("searches several folders on one connection and merges the pages newest first", async () => {
+    const { data } = await h.call("search_messages", {
+      folder: ["INBOX", "Archive"],
+      limit: 2,
+    });
+    expect(data).toMatchObject({
+      folders: [
+        { folder: "INBOX", total: 4, has_more: true },
+        { folder: "Archive", total: 1, has_more: false },
+      ],
+      offset: 0,
+      limit: 2,
+    });
+    expect(data).not.toHaveProperty("folder");
+    const rows = (data as { messages: Array<{ uid: number; folder: string }> })
+      .messages;
+    expect(rows.map((m) => [m.uid, m.folder])).toEqual([
+      [104, "INBOX"],
+      [103, "INBOX"],
+      [105, "Archive"],
+    ]);
+    expect(FakeImapFlow.calls.filter((c) => c === "connect")).toHaveLength(1);
+    expect(FakeImapFlow.calls.filter((c) => c.startsWith("lock:"))).toEqual([
+      "lock:INBOX",
+      "lock:Archive",
+    ]);
+  });
+
+  it("treats a repeated folder as one and keeps the single-folder shape", async () => {
+    const { data } = await h.call("search_messages", {
+      folder: ["INBOX", "INBOX"],
+    });
+    expect(data).toMatchObject({ folder: "INBOX", total: 4, has_more: false });
+    expect(data).not.toHaveProperty("folders");
+    expect(FakeImapFlow.calls.filter((c) => c.startsWith("lock:"))).toEqual([
+      "lock:INBOX",
+    ]);
+  });
+
+  it("fails the whole call when one of the folders does not exist", async () => {
+    const { raw, data } = await h.call("search_messages", {
+      folder: ["INBOX", "Nope"],
+    });
+    expect(raw.isError).toBe(true);
+    expect(String(data).startsWith("IMAP_NONEXISTENT:")).toBe(true);
+  });
+
+  it("refuses more than ten folders before any IMAP call", async () => {
+    const res = await h.client.callTool({
+      name: "search_messages",
+      arguments: { folder: Array.from({ length: 11 }, (_, i) => `F${i}`) },
+    });
+    expect(res.isError).toBe(true);
+    expect(FakeImapFlow.calls).not.toContain("connect");
+  });
+});
+
+describe("header rows", () => {
+  it("omits empty cc and flags, keeps other IMAP flags, and drops Yahoo's $Junk/$NotJunk marks", async () => {
+    await h.close();
+    FakeImapFlow.reset([
+      {
+        path: "INBOX",
+        messages: [
+          MSG_PLAIN,
+          MSG_MIXED,
+          {
+            ...MSG_REPLY,
+            flags: ["\\Seen", "\\Flagged", "\\Answered", "$NotJunk"],
+          },
+        ],
+      },
+    ]);
+    h = await startHarness();
+    const { data } = await h.call("search_messages", {});
+    const rows = (data as { messages: Array<Record<string, unknown>> })
+      .messages;
+    const byUid = Object.fromEntries(rows.map((r) => [r.uid as number, r]));
+    expect(byUid[101]).not.toHaveProperty("cc");
+    expect(byUid[101]).not.toHaveProperty("flags");
+    expect(byUid[101]).toMatchObject({ unread: false, flagged: false });
+    expect(byUid[102]).toMatchObject({
+      cc: ["cc@vendor.example"],
+      unread: true,
+    });
+    expect(byUid[103]).toMatchObject({
+      flags: ["\\Answered"],
+      unread: false,
+      flagged: true,
+    });
+    expect(JSON.stringify(data)).not.toContain("$NotJunk");
+  });
+});
+
+describe("top_senders", () => {
+  beforeEach(async () => {
+    await h.close();
+    FakeImapFlow.reset([...yahooFolders(), senderMix(), bigFolder(2500)]);
+    h = await startHarness();
+  });
+
+  it("ranks senders by count, then recency, with unread counts and the latest subject", async () => {
+    const { data } = await h.call("top_senders", { folder: "Mix" });
+    expect(data).toMatchObject({
+      folder: "Mix",
+      group_by: "address",
+      scanned: 8,
+      total: 8,
+      complete: true,
+      senders_total: 5,
+    });
+    const senders = (data as { senders: unknown[] }).senders;
+    expect(senders).toEqual([
+      {
+        sender: "help@walmart.com",
+        name: "Walmart.com",
+        count: 3,
+        unread: 2,
+        latest: {
+          uid: 204,
+          subject: "Arrived",
+          date: "2026-09-04T10:00:00.000Z",
+        },
+      },
+      {
+        sender: "venmo@venmo.com",
+        name: "Venmo",
+        count: 2,
+        unread: 1,
+        latest: {
+          uid: 207,
+          subject: "Sam requests $5",
+          date: "2026-09-07T10:00:00.000Z",
+        },
+      },
+      {
+        sender: "Mystery",
+        name: "Mystery",
+        count: 1,
+        unread: 1,
+        latest: {
+          uid: 208,
+          subject: "No address",
+          date: "2026-09-08T10:00:00.000Z",
+        },
+      },
+      {
+        sender: "friend@gmail.com",
+        name: null,
+        count: 1,
+        unread: 1,
+        latest: {
+          uid: 206,
+          subject: "Lunch?",
+          date: "2026-09-06T10:00:00.000Z",
+        },
+      },
+      {
+        sender: "deals@walmart.com",
+        name: "Walmart Deals",
+        count: 1,
+        unread: 0,
+        latest: {
+          uid: 205,
+          subject: "25% off",
+          date: "2026-09-05T10:00:00.000Z",
+        },
+      },
+    ]);
+    // One envelope fetch, no bodies.
+    expect(FakeImapFlow.calls.filter((c) => c.startsWith("fetchAll:"))).toEqual(
+      ["fetchAll:8"],
+    );
+    expect(FakeImapFlow.calls.some((c) => c.startsWith("bodyPart:"))).toBe(
+      false,
+    );
+  });
+
+  it("groups by domain with the number of distinct addresses, and honours limit", async () => {
+    const { data } = await h.call("top_senders", {
+      folder: "Mix",
+      group_by: "domain",
+      limit: 2,
+    });
+    expect(data).toMatchObject({ group_by: "domain", senders_total: 4 });
+    expect((data as { senders: unknown[] }).senders).toEqual([
+      {
+        sender: "walmart.com",
+        addresses: 2,
+        count: 4,
+        unread: 2,
+        latest: {
+          uid: 205,
+          subject: "25% off",
+          date: "2026-09-05T10:00:00.000Z",
+        },
+      },
+      {
+        sender: "venmo.com",
+        addresses: 1,
+        count: 2,
+        unread: 1,
+        latest: {
+          uid: 207,
+          subject: "Sam requests $5",
+          date: "2026-09-07T10:00:00.000Z",
+        },
+      },
+    ]);
+  });
+
+  it("applies the search filters before aggregating", async () => {
+    const { data } = await h.call("top_senders", {
+      folder: "Mix",
+      since: "2026-09-05",
+      unread_only: true,
+    });
+    expect(data).toMatchObject({ scanned: 2, total: 2, complete: true });
+    expect(
+      (data as { senders: Array<{ sender: string }> }).senders.map(
+        (s) => s.sender,
+      ),
+    ).toEqual(["Mystery", "friend@gmail.com"]);
+  });
+
+  it("scans at most 2000 newest messages in 1000-message fetches and says the picture is incomplete", async () => {
+    const { data } = await h.call("top_senders", { folder: "Big" });
+    expect(data).toMatchObject({
+      scanned: 2000,
+      total: 2500,
+      complete: false,
+      senders: [
+        { sender: "sender@example.com", name: null, count: 2000, unread: 0 },
+      ],
+    });
+    expect(FakeImapFlow.calls.filter((c) => c.startsWith("fetchAll:"))).toEqual(
+      ["fetchAll:1000", "fetchAll:1000"],
+    );
+  });
+
+  it("reports a complete picture when the filtered set fits", async () => {
+    const { data } = await h.call("top_senders", {
+      folder: "Big",
+      subject: "Needle",
+    });
+    expect(data).toMatchObject({ scanned: 4, total: 4, complete: true });
+  });
+
+  it("rejects a bad date with a stable code before touching the folder", async () => {
+    const { raw, data } = await h.call("top_senders", {
+      folder: "Mix",
+      since: "yesterday",
+    });
+    expect(raw.isError).toBe(true);
+    expect(String(data).startsWith("INVALID_ARGUMENT:")).toBe(true);
+    expect(h.db.rows.at(-1)).toMatchObject({
+      tool: "top_senders",
+      outcome: "error",
+    });
   });
 });

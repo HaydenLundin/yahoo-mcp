@@ -131,4 +131,4 @@ Each client gets its own token. Revoking one (from the connections console, or b
 
 ## Status
 
-Version 1.0.0, released 2026-10-12 after an adversarial review and a live Bcc check. Details in `ARCHITECTURE.md`; review record in `docs/reviews/`.
+Version 1.1.0, released 2026-10-13: folder counts in `list_folders`, `search_messages` over several folders, the `top_senders` aggregate, leaner header rows, and the 1.0.x hardening list. Version 1.0.0 shipped 2026-10-12 after an adversarial review and a live Bcc check. Details in `ARCHITECTURE.md`; review record in `docs/reviews/`.

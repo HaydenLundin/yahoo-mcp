@@ -12,6 +12,7 @@ vi.mock("imapflow", async () => {
 const READ_TOOLS = [
   "list_folders",
   "search_messages",
+  "top_senders",
   "get_message",
   "get_thread",
   "list_drafts",

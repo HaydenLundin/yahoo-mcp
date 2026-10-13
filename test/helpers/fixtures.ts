@@ -215,3 +215,80 @@ export function bigFolder(n = 2500): FakeFolder {
   }
   return { path: "Big", messages };
 }
+
+/**
+ * A folder with repeated senders for top_senders: three from help@walmart.com under two display
+ * names, two from Venmo, one from a second walmart.com address, one person, and one with a name
+ * but no address.
+ */
+export function senderMix(): FakeFolder {
+  const msg = (
+    uid: number,
+    day: number,
+    from: { name?: string; address?: string },
+    subject: string,
+    seen: boolean,
+  ): FakeMessage => ({
+    uid,
+    flags: seen ? ["\\Seen"] : [],
+    size: 500,
+    envelope: {
+      date: new Date(`2026-09-${String(day).padStart(2, "0")}T10:00:00Z`),
+      subject,
+      messageId: `<mix-${uid}@example>`,
+      from: [from],
+      to: [{ address: "me@yahoo.com" }],
+    },
+    structure: plain(),
+    parts: { "1": "x" },
+  });
+  return {
+    path: "Mix",
+    messages: [
+      msg(
+        201,
+        1,
+        { name: "Walmart", address: "help@walmart.com" },
+        "Order placed",
+        true,
+      ),
+      msg(
+        202,
+        2,
+        { name: "Walmart", address: "help@walmart.com" },
+        "Shipped",
+        false,
+      ),
+      msg(
+        203,
+        3,
+        { name: "Venmo", address: "venmo@venmo.com" },
+        "You paid Sam $20",
+        false,
+      ),
+      msg(
+        204,
+        4,
+        { name: "Walmart.com", address: "help@walmart.com" },
+        "Arrived",
+        false,
+      ),
+      msg(
+        205,
+        5,
+        { name: "Walmart Deals", address: "deals@walmart.com" },
+        "25% off",
+        true,
+      ),
+      msg(206, 6, { address: "friend@gmail.com" }, "Lunch?", false),
+      msg(
+        207,
+        7,
+        { name: "Venmo", address: "venmo@venmo.com" },
+        "Sam requests $5",
+        true,
+      ),
+      msg(208, 8, { name: "Mystery" }, "No address", false),
+    ],
+  };
+}

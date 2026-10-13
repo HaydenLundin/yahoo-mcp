@@ -193,7 +193,7 @@ log("tools:", tools.tools.map((t) => `${t.name}${t.annotations?.readOnlyHint ? "
     body: JSON.stringify({ jsonrpc: "2.0", id: 999, method: "tools/list", params: {} }),
   });
   const roTools = (await roList.json()).result.tools.map((t) => t.name);
-  const writes = roTools.filter((n) => !/^(list_folders|search_messages|get_message|get_thread|list_drafts|search|fetch)$/.test(n));
+  const writes = roTools.filter((n) => !/^(list_folders|search_messages|top_senders|get_message|get_thread|list_drafts|search|fetch)$/.test(n));
   if (writes.length) fail(`read-only grant exposes write tools: ${writes.join(", ")}`);
   log(`scope gating ok: read-only grant sees ${roTools.length} tools, none that write`);
 }
@@ -208,6 +208,8 @@ log(
     .map((f) => `${f.path}=${f.special_use}`)
     .join(", "),
 );
+if (folders.some((f) => typeof f.messages !== "number" || typeof f.unread !== "number")) fail("list_folders is missing counts");
+log("list_folders counts (messages/unread):", folders.map((f) => `${f.path}=${f.messages}/${f.unread}`).join(", "));
 
 // 5b. Read tools against the real mailbox. Counts and lengths only; never print mail content.
 async function tool(name, args) {
@@ -248,6 +250,26 @@ if (search.data.messages.length) {
 
 const drafts = await tool("list_drafts", { limit: 5 });
 log(`list_drafts ok in ${drafts.ms} ms: ${drafts.data.messages.length} of ${drafts.data.total} in ${drafts.data.folder}`);
+
+const sentPath = folders.find((f) => f.special_use === "sent")?.path;
+if (sentPath) {
+  const multi = await tool("search_messages", { folder: ["INBOX", sentPath], limit: 2 });
+  if (!Array.isArray(multi.data.folders) || multi.data.folders.length !== 2 || "folder" in multi.data) fail("search_messages multi-folder shape");
+  log(
+    `search_messages(2 folders) ok in ${multi.ms} ms: ${multi.data.messages.length} rows;`,
+    multi.data.folders.map((f) => `${f.folder}=${f.total ?? "unknown"}`).join(", "),
+  );
+}
+
+// Unfiltered, so the 2000-message scan and its two 1000-message envelope fetches run for real.
+const senders = await tool("top_senders", { limit: 5 });
+if (!Array.isArray(senders.data.senders) || typeof senders.data.scanned !== "number" || typeof senders.data.complete !== "boolean") {
+  fail("top_senders shape");
+}
+log(
+  `top_senders ok in ${senders.ms} ms: ${senders.data.senders_total} senders over ${senders.data.scanned} scanned ` +
+    `(total ${senders.data.total ?? "unknown"}, complete=${senders.data.complete}); top ${senders.data.senders.length} returned`,
+);
 
 // 5b2. ChatGPT connector aliases.
 const alias = await tool("search", { query: "order" });

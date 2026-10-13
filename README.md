@@ -14,7 +14,7 @@ Runs as a single Cloudflare Worker on the free tier. Verified end to end against
 
 | Area | Tools |
 |---|---|
-| Read | `list_folders`, `search_messages`, `get_message`, `get_thread`, `list_drafts`, plus `search` / `fetch` aliases for ChatGPT connectors |
+| Read | `list_folders` (with message and unread counts), `search_messages` (one folder or several), `top_senders`, `get_message`, `get_thread`, `list_drafts`, plus `search` / `fetch` aliases for ChatGPT connectors |
 | Organize | `move_messages`, `archive_messages`, `trash_messages`, `mark_read`, `mark_unread`, `flag_messages`, `unflag_messages` |
 | Draft | `create_draft`, `update_draft`, `delete_draft` |
 | Send, only when `SEND_ENABLED` is true | `send_message`, `reply_message`, `forward_message` prepare a preview and a five-minute token; `confirm_send` delivers and files a copy in Sent; `cancel_send` discards |

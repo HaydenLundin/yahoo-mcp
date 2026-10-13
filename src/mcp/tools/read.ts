@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type {
   FetchMessageObject,
+  FetchQueryObject,
   ImapFlow,
   ListResponse,
   SearchObject,
@@ -9,6 +10,8 @@ import { z } from "zod";
 import { normalizeError, ToolError } from "../../lib/errors";
 import {
   downloadText,
+  FETCH_MAX,
+  locked,
   pagedSearch,
   withImap,
   withMailbox,
@@ -34,6 +37,15 @@ import { READ_ONLY, runTool, type ToolDeps } from "../tool";
 const PAGE_MAX = 50;
 /** Paging deeper than this would mean scanning most of the folder on every call. */
 const OFFSET_MAX = 2000;
+/** search_messages takes at most this many folders per call; each is one SELECT on the same connection. */
+const FOLDERS_MAX = 10;
+/** top_senders aggregates at most this many of the newest matching messages: two Yahoo fetch batches. */
+const TOP_SENDERS_SCAN = 2000;
+const TOP_SENDERS_MAX = 100;
+/** Yahoo's spam classifier marks. They say nothing about the user's intent, so they never reach a client. */
+const YAHOO_CLASSIFIER_FLAGS = new Set(["$Junk", "$NotJunk"]);
+/** Reported as the `unread` and `flagged` booleans rather than repeated in `flags`. */
+const BOOLEAN_FLAGS = new Set(["\\Seen", "\\Flagged"]);
 /** get_thread with include_bodies downloads at most this many bodies, each capped at THREAD_BODY_LIMIT. */
 const THREAD_BODY_MAX = 20;
 const THREAD_BODY_LIMIT = 20_000;
@@ -45,6 +57,8 @@ const SUMMARY_QUERY = {
   size: true,
   bodyStructure: true,
 } as const;
+/** What top_senders needs per message: no BODYSTRUCTURE, so 2000 rows stay small. */
+const ENVELOPE_QUERY = { uid: true, envelope: true, flags: true } as const;
 const THREAD_HEADERS = ["message-id", "in-reply-to", "references"];
 
 export interface MessageSummary {
@@ -52,15 +66,53 @@ export interface MessageSummary {
   folder: string;
   from: string[];
   to: string[];
-  cc: string[];
+  /** Omitted when empty. */
+  cc?: string[];
   subject: string | null;
   date: string | null;
-  flags: string[];
+  /** IMAP flags beyond read and starred state (`\Answered`, `\Draft`, ...); omitted when empty. */
+  flags?: string[];
   unread: boolean;
   flagged: boolean;
   has_attachments: boolean;
   size: number | null;
 }
+
+/** The filters search_messages and top_senders share, as a zod raw shape. */
+const SEARCH_FILTERS = {
+  query: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Free text matched against headers and body"),
+  from: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Substring of the From address or name"),
+  to: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Substring of the To address or name"),
+  subject: z.string().min(1).optional().describe("Substring of the Subject"),
+  since: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Only messages received on or after this date (YYYY-MM-DD or ISO 8601)",
+    ),
+  before: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Only messages received before this date (YYYY-MM-DD or ISO 8601)",
+    ),
+  unread_only: z.boolean().optional(),
+  flagged_only: z.boolean().optional(),
+};
 
 /** `mail.read` tools (ARCHITECTURE.md section 5.1). */
 export function registerReadTools(server: McpServer, deps: ToolDeps): void {
@@ -71,13 +123,18 @@ export function registerReadTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "List folders",
       description:
-        "List every folder in the Yahoo mailbox with its path, hierarchy delimiter, and special-use role " +
-        "(inbox, sent, drafts, trash, archive, junk) when Yahoo reports one. Use these paths as the `folder` argument of other tools.",
+        "List every folder in the Yahoo mailbox with its path, hierarchy delimiter, special-use role " +
+        "(inbox, sent, drafts, trash, archive, junk) when Yahoo reports one, and its message and unread counts " +
+        "(null when Yahoo reports none), all in one round trip. Use these paths as the `folder` argument of other tools.",
       annotations: READ_ONLY,
     },
     () =>
       runTool(deps, { name: "list_folders", kind: "read" }, async () => {
-        const folders = await withImap(ctx, (client) => client.list());
+        // Yahoo advertises LIST-STATUS, so the counts ride along with the listing; imapflow
+        // falls back to one STATUS per folder on servers that lack it.
+        const folders = await withImap(ctx, (client) =>
+          client.list({ statusQuery: { messages: true, unseen: true } }),
+        );
         return {
           folders: folders
             .filter((f) => f.listed)
@@ -85,6 +142,8 @@ export function registerReadTools(server: McpServer, deps: ToolDeps): void {
               path: f.path,
               delimiter: f.delimiter,
               special_use: specialUseName(f),
+              messages: f.status?.messages ?? null,
+              unread: f.status?.unseen ?? null,
             })),
         };
       }),
@@ -95,48 +154,26 @@ export function registerReadTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "Search messages",
       description:
-        "Search one folder and return message headers only (never bodies): uid, from, to, subject, date, flags, " +
-        "attachment presence, size. Results are newest first. `total` is exact when known and null when the " +
+        "Search one or more folders and return message headers only (never bodies): uid, folder, from, to, cc, " +
+        "subject, date, flags, unread, flagged, attachment presence, size. Results are newest first. " +
+        `\`folder\` is one path or a list of up to ${FOLDERS_MAX}, searched in turn on one connection; \`limit\` and \`offset\` apply per folder. ` +
+        "With one folder the result has `folder`, `total` and `has_more`; with several it has `folders: [{folder, total, has_more}]` " +
+        "and the messages of all of them merged newest first. `total` is exact when known and null when the " +
         "search stopped early because the page was full; `has_more` says whether to ask for the next offset. " +
-        "Combine filters freely; with no filters it lists the newest messages. Pass a uid to get_message for the body.",
+        "Combine filters freely; with no filters it lists the newest messages. `cc` and `flags` are omitted when empty; " +
+        "`flags` holds IMAP flags beyond the `unread` and `flagged` booleans (for example \\Answered), never Yahoo's own $Junk/$NotJunk marks. " +
+        "Pass a uid and its folder to get_message for the body.",
       inputSchema: {
-        query: z
-          .string()
-          .min(1)
-          .optional()
-          .describe("Free text matched against headers and body"),
-        from: z
-          .string()
-          .min(1)
-          .optional()
-          .describe("Substring of the From address or name"),
-        to: z
-          .string()
-          .min(1)
-          .optional()
-          .describe("Substring of the To address or name"),
-        subject: z
-          .string()
-          .min(1)
-          .optional()
-          .describe("Substring of the Subject"),
-        since: z
-          .string()
-          .min(1)
-          .optional()
+        ...SEARCH_FILTERS,
+        folder: z
+          .union([
+            z.string().min(1),
+            z.array(z.string().min(1)).min(1).max(FOLDERS_MAX),
+          ])
+          .default("INBOX")
           .describe(
-            "Only messages received on or after this date (YYYY-MM-DD or ISO 8601)",
+            "A folder path, or a list of paths to search on one connection",
           ),
-        before: z
-          .string()
-          .min(1)
-          .optional()
-          .describe(
-            "Only messages received before this date (YYYY-MM-DD or ISO 8601)",
-          ),
-        unread_only: z.boolean().optional(),
-        flagged_only: z.boolean().optional(),
-        folder: z.string().min(1).default("INBOX"),
         limit: z.number().int().min(1).max(PAGE_MAX).default(20),
         offset: z.number().int().min(0).max(OFFSET_MAX).default(0),
       },
@@ -145,22 +182,108 @@ export function registerReadTools(server: McpServer, deps: ToolDeps): void {
     (args) =>
       runTool(deps, { name: "search_messages", kind: "read" }, async () => {
         const criteria = buildSearch(args);
-        return withMailbox(ctx, args.folder, async (client) => {
-          const page = await pagedSearch(client, criteria, {
-            offset: args.offset,
-            limit: args.limit,
-          });
-          const messages = await fetchSummaries(client, page.uids, args.folder);
+        const folders = uniqueFolders(args.folder);
+        const page = { offset: args.offset, limit: args.limit };
+        return withImap(ctx, async (client) => {
+          const pages: FolderPage[] = [];
+          for (const folder of folders) {
+            pages.push(
+              await locked(client, folder, async (c) => {
+                const found = await pagedSearch(c, criteria, page);
+                const messages = await fetchSummaries(c, found.uids, folder);
+                return {
+                  folder,
+                  total: found.total,
+                  has_more: found.hasMore,
+                  messages,
+                };
+              }),
+            );
+          }
+          if (pages.length === 1) {
+            const [only] = pages;
+            return {
+              folder: only.folder,
+              total: only.total,
+              has_more: only.has_more,
+              ...page,
+              messages: only.messages,
+            };
+          }
           return {
-            folder: args.folder,
-            total: page.total,
-            has_more: page.hasMore,
-            offset: args.offset,
-            limit: args.limit,
-            messages,
+            folders: pages.map(({ folder, total, has_more }) => ({
+              folder,
+              total,
+              has_more,
+            })),
+            ...page,
+            messages: pages.flatMap((p) => p.messages).sort(newestFirst),
           };
         });
       }),
+  );
+
+  server.registerTool(
+    "top_senders",
+    {
+      title: "Top senders",
+      description:
+        "Aggregate one folder by sender in a single call: how many messages each sender has, how many of them are unread, " +
+        "and the newest subject from each. Takes the same filters as search_messages. It scans the newest matching messages, " +
+        `at most ${TOP_SENDERS_SCAN}; \`scanned\` says how many and \`complete\` whether that was every match, so add \`since\` ` +
+        "for an exact picture of a period. group_by 'domain' groups by the sender's domain, the unit Yahoo mail filters route on. " +
+        "Headers only; nothing is changed. Use search_messages with `from` to list one sender's messages.",
+      inputSchema: {
+        ...SEARCH_FILTERS,
+        folder: z.string().min(1).default("INBOX"),
+        group_by: z
+          .enum(["address", "domain"])
+          .default("address")
+          .describe(
+            "Group by the full sender address (default) or by its domain",
+          ),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(TOP_SENDERS_MAX)
+          .default(20)
+          .describe("How many senders to return, most messages first"),
+      },
+      annotations: READ_ONLY,
+    },
+    (args) =>
+      runTool(deps, { name: "top_senders", kind: "read" }, async () =>
+        withMailbox(ctx, args.folder, async (client) => {
+          const found = await pagedSearch(client, buildSearch(args), {
+            offset: 0,
+            limit: TOP_SENDERS_SCAN,
+          });
+          const fetched = await fetchMessages(
+            client,
+            found.uids,
+            ENVELOPE_QUERY,
+          );
+          const ranked = aggregateSenders(found.uids, fetched, args.group_by);
+          return {
+            folder: args.folder,
+            group_by: args.group_by,
+            scanned: fetched.size,
+            total: found.total,
+            complete: !found.hasMore,
+            senders_total: ranked.length,
+            senders: ranked.slice(0, args.limit).map((b) => ({
+              sender: b.sender,
+              ...(args.group_by === "address"
+                ? { name: b.name }
+                : { addresses: b.addresses.size }),
+              count: b.count,
+              unread: b.unread,
+              latest: b.latest,
+            })),
+          };
+        }),
+      ),
   );
 
   server.registerTool(
@@ -373,14 +496,103 @@ function parseDate(value: string, field: string): Date {
   return d;
 }
 
-/** One FETCH for everything a summary (and readBody) needs, keyed by uid; uids gone meanwhile are absent. */
+/**
+ * Fetch `query` for every uid, keyed by uid; uids gone meanwhile are absent. One FETCH per
+ * FETCH_MAX uids, because Yahoo caps a single fetch at that many messages.
+ */
 export async function fetchMessages(
   client: ImapFlow,
   uids: number[],
+  query: FetchQueryObject = SUMMARY_QUERY,
 ): Promise<Map<number, FetchMessageObject>> {
-  if (uids.length === 0) return new Map();
-  const fetched = await client.fetchAll(uids, SUMMARY_QUERY, { uid: true });
-  return new Map(fetched.map((m) => [m.uid, m]));
+  const byUid = new Map<number, FetchMessageObject>();
+  for (let i = 0; i < uids.length; i += FETCH_MAX) {
+    const batch = uids.slice(i, i + FETCH_MAX);
+    const fetched = await client.fetchAll(batch, query, { uid: true });
+    for (const m of fetched) byUid.set(m.uid, m);
+  }
+  return byUid;
+}
+
+interface FolderPage {
+  folder: string;
+  total: number | null;
+  has_more: boolean;
+  messages: MessageSummary[];
+}
+
+/** Order-preserving dedupe, so `["INBOX", "INBOX"]` is one folder, not the same page twice. */
+function uniqueFolders(folder: string | string[]): string[] {
+  return [...new Set(Array.isArray(folder) ? folder : [folder])];
+}
+
+function newestFirst(a: MessageSummary, b: MessageSummary): number {
+  return (b.date ?? "").localeCompare(a.date ?? "") || b.uid - a.uid;
+}
+
+interface SenderBucket {
+  /** The group key: a lowercased address, or a domain when grouping by domain. */
+  sender: string;
+  /** Most recent non-empty display name seen for the address. */
+  name: string | null;
+  addresses: Set<string>;
+  count: number;
+  unread: number;
+  latest: { uid: number; subject: string | null; date: string | null };
+}
+
+/**
+ * Bucket messages by sender. `uids` must be newest first (as pagedSearch returns them), so the
+ * first message seen for a bucket is its latest. Most messages first, then most recent, then name.
+ */
+export function aggregateSenders(
+  uids: number[],
+  byUid: Map<number, FetchMessageObject>,
+  groupBy: "address" | "domain",
+): SenderBucket[] {
+  const buckets = new Map<string, SenderBucket>();
+  for (const uid of uids) {
+    const m = byUid.get(uid);
+    if (!m) continue;
+    const first = m.envelope?.from?.[0];
+    const address = first?.address?.trim().toLowerCase() || null;
+    const name = first?.name?.trim() || null;
+    const key =
+      groupBy === "domain"
+        ? domainOf(address)
+        : (address ?? name ?? "(unknown)");
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = {
+        sender: key,
+        name: null,
+        addresses: new Set(),
+        count: 0,
+        unread: 0,
+        latest: {
+          uid: m.uid,
+          subject: m.envelope?.subject ?? null,
+          date: toIsoDate(m.envelope?.date),
+        },
+      };
+      buckets.set(key, bucket);
+    }
+    bucket.count++;
+    if (!m.flags?.has("\\Seen")) bucket.unread++;
+    if (address) bucket.addresses.add(address);
+    if (!bucket.name && name) bucket.name = name;
+  }
+  return [...buckets.values()].sort(
+    (a, b) =>
+      b.count - a.count ||
+      (b.latest.date ?? "").localeCompare(a.latest.date ?? "") ||
+      a.sender.localeCompare(b.sender),
+  );
+}
+
+function domainOf(address: string | null): string {
+  const at = address ? address.lastIndexOf("@") : -1;
+  return address && at >= 0 ? address.slice(at + 1) : "(unknown)";
 }
 
 export async function fetchSummaries(
@@ -400,15 +612,20 @@ export function toSummary(
   folder: string,
 ): MessageSummary {
   const flags = [...(m.flags ?? [])];
+  const cc = formatAddresses(m.envelope?.cc);
+  // Read and starred state are booleans below; Yahoo's classifier marks are noise to a client.
+  const extra = flags.filter(
+    (f) => !BOOLEAN_FLAGS.has(f) && !YAHOO_CLASSIFIER_FLAGS.has(f),
+  );
   return {
     uid: m.uid,
     folder,
     from: formatAddresses(m.envelope?.from),
     to: formatAddresses(m.envelope?.to),
-    cc: formatAddresses(m.envelope?.cc),
+    ...(cc.length ? { cc } : {}),
     subject: m.envelope?.subject ?? null,
     date: toIsoDate(m.envelope?.date),
-    flags,
+    ...(extra.length ? { flags: extra } : {}),
     unread: !flags.includes("\\Seen"),
     flagged: flags.includes("\\Flagged"),
     has_attachments: listAttachments(m.bodyStructure).length > 0,
