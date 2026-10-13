@@ -104,7 +104,7 @@ export function registerCompatTools(server: McpServer, deps: ToolDeps): void {
               uid,
               from: summary.from,
               to: summary.to,
-              cc: summary.cc,
+              cc: summary.cc ?? [],
               date: summary.date,
               unread: summary.unread,
               flagged: summary.flagged,

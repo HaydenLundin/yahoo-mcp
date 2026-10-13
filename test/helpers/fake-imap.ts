@@ -1,6 +1,7 @@
 import type {
   FetchMessageObject,
   FetchQueryObject,
+  ListOptions,
   ListResponse,
   MessageEnvelopeObject,
   MessageStructureObject,
@@ -117,8 +118,9 @@ export class FakeImapFlow {
     FakeImapFlow.calls.push("close");
   }
 
-  async list(): Promise<ListResponse[]> {
-    FakeImapFlow.calls.push("list");
+  /** With `statusQuery`, counts ride along as LIST-STATUS would deliver them: one round trip, no SELECT. */
+  async list(options?: ListOptions): Promise<ListResponse[]> {
+    FakeImapFlow.calls.push(options?.statusQuery ? "list:status" : "list");
     return FakeImapFlow.folders.map((f) => ({
       path: f.path,
       pathAsListed: f.path,
@@ -130,6 +132,17 @@ export class FakeImapFlow {
       specialUse: f.specialUse,
       listed: f.listed ?? true,
       subscribed: true,
+      ...(options?.statusQuery
+        ? {
+            status: {
+              path: f.path,
+              messages: f.messages.length,
+              unseen: f.messages.filter(
+                (m) => !(m.flags ?? []).includes("\\Seen"),
+              ).length,
+            },
+          }
+        : {}),
     }));
   }
 

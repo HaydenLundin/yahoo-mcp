@@ -24,6 +24,8 @@ const YAHOO_IMAP = { host: "imap.mail.yahoo.com", port: 993 } as const;
  */
 export const IMAP_CHUNK_BYTES = 60_000;
 export const SEARCH_WINDOW = 1000;
+/** Yahoo advertises MESSAGELIMIT=1000: one FETCH may address at most this many messages. */
+export const FETCH_MAX = 1000;
 
 export interface ImapContext {
   env: Env;

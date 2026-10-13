@@ -46,6 +46,7 @@ describe("tools/list annotations", () => {
         "move_messages",
         "search",
         "search_messages",
+        "top_senders",
         "trash_messages",
         "unflag_messages",
         "update_draft",
@@ -77,7 +78,14 @@ describe("tools/list annotations", () => {
       destructiveHint: false,
       idempotentHint: true,
     });
-    expect(tools.some((t) => t.name.includes("send"))).toBe(false);
+    // top_senders is a read tool; the send group is the five phase-1/phase-2 tools.
+    expect(
+      tools.some((t) =>
+        /^(send_message|reply_message|forward_message|confirm_send|cancel_send)$/.test(
+          t.name,
+        ),
+      ),
+    ).toBe(false);
   });
 });
 

@@ -16,7 +16,7 @@ Known behaviours that look like bugs but are not, and where to look first.
 
 ## Yahoo IMAP
 
-- Yahoo rate-limits IMAP logins per account: `AUTHENTICATE Rate limit hit.` with response code `LIMIT`, surfaced as `IMAP_RATE_LIMITED`. Every tool call is one login, and so is every health probe against the spike Worker. Stop dev servers you are not reading, do not loop `pnpm e2e`, and wait several minutes after a `LIMIT`. The app password is not the problem.
+- Yahoo rate-limits IMAP logins per account: `AUTHENTICATE Rate limit hit.` with response code `LIMIT`, surfaced as `IMAP_RATE_LIMITED`. Every tool call is one login, and so is every health probe against the spike Worker. Six tool calls issued in parallel by one client tripped it (2026-10-12); batches of three or four did not. Stop dev servers you are not reading, do not loop `pnpm e2e`, and wait several minutes after a `LIMIT`. The app password is not the problem.
 - Failed logins are slow (about 5 s). Successful connect plus login is about 1.7 s on the edge. If every call is slow, check credentials first.
 - Folder names: `Sent`, `Draft` (singular), `Trash`, `Archive`, `Bulk` (junk). Special-use flags are correct; names are not to be trusted.
 - Yahoo does not keep the `\Draft` message flag on a draft we APPEND with it (seen live 2026-10-12: a fresh create_draft fetched back without the flag). Never make a tool depend on `\Draft`; the Drafts folder is the only reliable signal.
